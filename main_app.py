@@ -62,9 +62,9 @@ from PyQt5.QtWidgets import *
 #             pt = QPointF(scale * point.x(), scale * point.y())
 #             painter.drawEllipse(pt, 1.0, 1.0)
 
-WIDTH = 300
-HEIGHT = 250
-DEFAULT_NUM_POINTS = 15
+WIDTH = 600
+HEIGHT = 500
+DEFAULT_NUM_POINTS = 5
 
 
 # Subclass QMainWindow to customize your application's main window
@@ -74,7 +74,12 @@ class MainWindow(QMainWindow):
 
         self.voronoi_diagram = np.full((HEIGHT, WIDTH, 3), 255, np.uint8)
         self.show_points = True
+        self.show_lines = True
+        self.show_colors = True
+        # TODO: allow toggling of lines and colors, and find the lines from the color voronoi
+
         self.points = []
+        self.point_colors = []
 
         self.setWindowTitle("Voronoi Art Maker")
         layout = QVBoxLayout()
@@ -85,8 +90,6 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(main_widget)
 
         # add the image frame
-        self.progress = 0
-        # TODO: add conditional progress bar on top of the image frame
         self.image_frame = QLabel()
         layout.addWidget(self.image_frame)
 
@@ -109,11 +112,25 @@ class MainWindow(QMainWindow):
         self.toggle_points_box.setChecked(True)
         self.toggle_points_box.stateChanged.connect(self.toggle_points_clicked)
         h.addWidget(self.toggle_points_box)
-        # add the 'generate voronoi' button
-        self.voronoi_button = QPushButton("Generate Voronoi Diagram")
-        self.voronoi_button.clicked.connect(self.voronoi_clicked)
-        h.addWidget(self.voronoi_button)
+        # add the 'generate line voronoi' button
+        self.line_voronoi_button = QPushButton("Generate Line Voronoi")
+        self.line_voronoi_button.clicked.connect(self.line_voronoi_clicked)
+        h.addWidget(self.line_voronoi_button)
+        # add the 'generate color voronoi' button
+        self.color_voronoi_button = QPushButton("Generate Color Voronoi")
+        self.color_voronoi_button.clicked.connect(self.color_voronoi_clicked)
+        h.addWidget(self.color_voronoi_button)
         layout.addLayout(h)
+
+        # add the progress bar
+        h = QHBoxLayout()
+        h.addWidget(QLabel('Progress: '))
+        self.progress_bar = QProgressBar()
+        # self.progress_bar.setAlignment(Qt.AlignCenter)
+        h.addWidget(self.progress_bar)
+        layout.addLayout(h)
+
+        self.progress = 0
 
         self.generate_random_points(DEFAULT_NUM_POINTS)
         self.set_diagram()
@@ -127,9 +144,14 @@ class MainWindow(QMainWindow):
         # clear the frame and reset it with the new points (conditionally)
         self.set_diagram(reset=True)
 
-    def voronoi_clicked(self):
-        print("voronoi clicked")
-        self.solve_voronoi()
+    def line_voronoi_clicked(self):
+        print("line voronoi clicked")
+        self.my_voronoi()
+        self.set_diagram()
+
+    def color_voronoi_clicked(self):
+        print("color voronoi clicked")
+        self.color_voronoi()
         self.set_diagram()
 
     def toggle_points_clicked(self, checked):
@@ -142,7 +164,7 @@ class MainWindow(QMainWindow):
 
     # check input of the 'num points' field
     def check_input(self):
-        if self.num_points.text().isdigit():
+        if self.num_points.text().isdigit() and int(self.num_points.text()) > 1:
             self.points_button.setEnabled(True)
         else:
             self.points_button.setEnabled(False)
@@ -169,33 +191,46 @@ class MainWindow(QMainWindow):
     # generate new, random points
     def generate_random_points(self, num_points):
         # generate the new points
-        pt_list = []
+        self.points = []
+        self.point_colors = []
         for _ in range(num_points):
             x = random.randint(0, WIDTH)
             y = random.randint(0, HEIGHT)
-            pt_list.append((x, y))
-        self.points = pt_list
+            self.points.append((x, y))
+
+            self.point_colors.append(tuple(random.choices(range(256), k=3)))
         # self.points = [(10, 10), (400, 400), (10, 400)]
 
-    def solve_voronoi(self):
+    def enable_all(self, t_f):
+        self.num_points.setEnabled(t_f)
+        self.points_button.setEnabled(t_f)
+        self.line_voronoi_button.setEnabled(t_f)
+        self.color_voronoi_button.setEnabled(t_f)
+        self.toggle_points_box.setEnabled(t_f)
+        if t_f:
+            self.check_input()
+
+    # my naive approach to generating just the lines of a voronoi diagram with the given points
+    def my_voronoi(self):
+        self.enable_all(False)
         self.voronoi_diagram = np.full((HEIGHT, WIDTH, 3), 255, np.uint8)
 
         self.points = sorted(self.points)  # , key=lambda k: [k[1], k[0]])
 
-        for i in tqdm(range(len(self.voronoi_diagram))):
+        self.progress_bar.setValue(0)
+
+        length = len(self.voronoi_diagram)
+        for i in tqdm(range(length)):
             for j in range(len(self.voronoi_diagram[i])):
                 min_dist = np.inf
                 min_dist_ctr = 0
                 for point in self.points:
                     # we are too far to be considered as the closest point
                     if abs(j - point[0]) > min_dist or abs(i - point[1]) > min_dist:
-                        # print(min_dist)
-                        # print((j, i), point)
                         continue
 
                     pixel = np.array((j, i))
                     np_point = np.array(point)
-                    # print(pixel, point)
                     dist = round(np.linalg.norm(pixel - np_point))
 
                     # update the minimum distance
@@ -204,7 +239,6 @@ class MainWindow(QMainWindow):
                         min_dist_ctr = 1
                     # if two points have the same distance to the pixel, note it
                     elif dist == min_dist:
-                        # canvas[i][j] = (0, 0, 0)
                         min_dist_ctr += 1
                     # the remaining points won't be closer than the min distance (since the points are sorted)
                     elif j - point[0] > min_dist:
@@ -213,9 +247,39 @@ class MainWindow(QMainWindow):
                 # this pixel is in between two points, paint it black
                 if min_dist_ctr > 1:
                     self.voronoi_diagram[i][j] = (0, 0, 0)
-                # if min_dist_ctr > 2:
-                #     canvas = cv2.circle(canvas, (j, i), 2, (0, 255, 0), -1)
-                #     print("green")
+
+            self.progress_bar.setValue(int((i+1)*100/length))
+
+        self.enable_all(True)
+
+    # mathematical approach to generating a colored voronoi diagram with the given points
+    # https://gist.github.com/bert/1188638/78a80d1824ffb2b64c736550d62b3e770e5a45b5
+    def color_voronoi(self):
+        self.enable_all(False)
+
+        depth_map = None
+        color_map = np.zeros((HEIGHT, WIDTH), np.int)
+
+        self.progress_bar.setValue(0)
+
+        def hypot(Y, X):
+            return (X - x) ** 2 + (Y - y) ** 2
+
+        for i, (x, y) in enumerate(self.points):
+            # matrix with each cell representing the distance from it to the point
+            paraboloid = np.fromfunction(hypot, (HEIGHT, WIDTH))
+            if i == 0:
+                depth_map = paraboloid.copy()
+            else:
+                color_map = np.where(paraboloid < depth_map, i, color_map)
+                depth_map = np.where(paraboloid < depth_map, paraboloid, depth_map)
+            self.progress_bar.setValue(int((i+1)*100/len(self.points)))
+
+        self.voronoi_diagram = np.empty((HEIGHT, WIDTH, 3), np.int8)
+        self.point_colors = np.array(self.point_colors)
+        self.voronoi_diagram[:, :, ] = self.point_colors[color_map]
+
+        self.enable_all(True)
 
 
 if __name__ == '__main__':
