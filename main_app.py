@@ -3,11 +3,8 @@ import sys
 import cv2
 import numpy as np
 import random
-# from tqdm import tqdm
-
-# from PyQt5.QtCore import QSize, Qt, QPointF
-from PyQt5.QtGui import QPainter, QTransform, QColor, QImage, QPixmap
-from PyQt5.QtWidgets import *
+from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtWidgets import *
 
 # SCALE = 1.0
 #
@@ -267,7 +264,7 @@ class MainWindow(QMainWindow):
                         image[i][j] = (0, 0, 0)
 
         # switch the diagram to PyQt form and put it in the image frame
-        q_image = QImage(image.data, self.im_width, self.im_height, QImage.Format_RGB888)  # .rgbSwapped()
+        q_image = QImage(image.data, self.im_width, self.im_height, QImage.Format.Format_RGB888)  # .rgbSwapped()
         self.image_frame.setPixmap(QPixmap.fromImage(q_image))
 
     # generate new, random points
@@ -287,6 +284,7 @@ class MainWindow(QMainWindow):
     def enable_all(self, t_f):
         self.num_points_field.setEnabled(t_f)
         self.generate_points_button.setEnabled(t_f)
+        self.upload_image_button.setEnabled(t_f)
         # self.line_voronoi_button.setEnabled(t_f)
         self.color_voronoi_button.setEnabled(t_f)
         self.toggle_points_box.setEnabled(t_f)
