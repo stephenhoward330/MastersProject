@@ -5,6 +5,8 @@ import numpy as np
 import random
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import *
+from PyQt6.QtCore import Qt
+from time import time
 
 # SCALE = 1.0
 #
@@ -61,10 +63,12 @@ from PyQt6.QtWidgets import *
 
 DEFAULT_WIDTH = 600
 DEFAULT_HEIGHT = 500
-DEFAULT_NUM_POINTS = 5
+DEFAULT_NUM_POINTS = 500
+
+# TODO: allow the user to save the result to file
+# TODO: sample more points in darker regions of the image
 
 
-# Subclass QMainWindow to customize your application's main window
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -83,7 +87,6 @@ class MainWindow(QMainWindow):
         self.progress = 0
 
         self.points = []
-        self.point_colors = []
 
         self.setWindowTitle("Voronoi Art Maker")
         layout = QVBoxLayout()
@@ -94,8 +97,15 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(main_widget)
 
         # add the image frame
-        self.image_frame = QLabel()
+        self.image_frame = QLabel("Your Image Will Show Here")
+        self.image_frame.setMinimumHeight(DEFAULT_HEIGHT)
+        self.image_frame.setMinimumWidth(DEFAULT_WIDTH)
+        self.image_frame.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.image_frame)
+
+        # add the diagram frame
+        self.diagram_frame = QLabel()
+        layout.addWidget(self.diagram_frame)
 
         h = QHBoxLayout()
         # add the 'number of points' text and box
@@ -144,7 +154,7 @@ class MainWindow(QMainWindow):
         h = QHBoxLayout()
         h.addWidget(QLabel('Progress: '))
         self.progress_bar = QProgressBar()
-        # self.progress_bar.setAlignment(Qt.AlignCenter)
+        # self.progress_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
         h.addWidget(self.progress_bar)
         layout.addLayout(h)
 
@@ -157,39 +167,57 @@ class MainWindow(QMainWindow):
     def generate_points_clicked(self):
         print("generate points clicked")
         self.generate_random_points(int(self.num_points_field.text()))
-        # clear the frame and reset it with the new points (conditionally)
-        self.im_height = DEFAULT_HEIGHT
-        self.im_width = DEFAULT_WIDTH
+        # clear the frame and reset it with the new points
+        # self.im_height = DEFAULT_HEIGHT
+        # self.im_width = DEFAULT_WIDTH
         self.set_diagram(reset=True)
 
     def upload_image_clicked(self):
-        print("upload image clicked")
-        image_files = None
+        if self.image is None:
+            print("upload image clicked")
+            image_files = None
 
-        dialog = QFileDialog(self)
-        dialog.setFileMode(QFileDialog.ExistingFile)
-        dialog.setNameFilter("Images (*.png *.jpg)")
-        dialog.setViewMode(QFileDialog.List)
-        dialog.setWindowTitle("Open Image")
+            dialog = QFileDialog(self)
+            dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+            dialog.setNameFilter("Images (*.png *.jpg *.jpeg)")
+            dialog.setViewMode(QFileDialog.ViewMode.List)
+            dialog.setWindowTitle("Open Image")
 
-        if dialog.exec_():
-            image_files = dialog.selectedFiles()
-        if image_files is None:
-            print("None entered")
-            return
-        if len(image_files) > 1:
-            print("Multiple files entered, using the first")
-        image_file = image_files[0]
-        print(image_file)
-        try:
-            self.image = cv2.imread(image_file, cv2.IMREAD_COLOR)
-            print(self.image.shape)
-            self.im_height = self.image.shape[0]
-            self.im_width = self.image.shape[1]
-        except Exception as e:
-            print(e)
+            if dialog.exec():
+                image_files = dialog.selectedFiles()
+            if image_files is None:
+                print("None entered")
+                return
+            # if len(image_files) > 1:  # impossible with 'ExistingFile'
+            #     print("Multiple files entered, using the first")
+            image_file = image_files[0]
+            print(image_file)
+            try:
+                image = cv2.imread(image_file, cv2.IMREAD_COLOR)
+                # print(image.shape)
+                self.image = cv2.resize(image, (self.im_width, self.im_height))
+                # self.im_height = self.image.shape[0]
+                # self.im_width = self.image.shape[1]
 
-        self.set_diagram(reset=True)
+                q_image = QImage(self.image.data, self.im_width, self.im_height, QImage.Format.Format_BGR888)
+                self.image_frame.setPixmap(QPixmap.fromImage(q_image))
+
+                self.set_diagram(reset=True)
+                self.upload_image_button.setText("Clear Image")
+            except Exception as e:
+                print(e)
+                quit()
+        else:
+            print("clear image clicked")
+            self.image = None
+            # self.im_height = DEFAULT_HEIGHT
+            # self.im_width = DEFAULT_WIDTH
+
+            self.image_frame.clear()
+            self.image_frame.setText("Your Image Will Show Here")
+
+            self.set_diagram(reset=True)
+            self.upload_image_button.setText("Upload Image")
 
     def toggle_points_clicked(self, checked):
         print("toggle points clicked", checked)
@@ -222,7 +250,7 @@ class MainWindow(QMainWindow):
 
     def color_voronoi_clicked(self):
         print("color voronoi clicked")
-        self.color_voronoi()
+        self.generate_voronoi()
         self.set_diagram()
 
     # check input of the 'num points' field
@@ -247,7 +275,9 @@ class MainWindow(QMainWindow):
 
         # add the points to the canvas (or not)
         if self.show_points:
-            if len(self.points) >= 200:
+            if len(self.points) >= 2000:
+                radius = 0
+            elif len(self.points) >= 200:
                 radius = 1
             elif len(self.points) >= 50:
                 radius = 2
@@ -264,21 +294,22 @@ class MainWindow(QMainWindow):
                         image[i][j] = (0, 0, 0)
 
         # switch the diagram to PyQt form and put it in the image frame
-        q_image = QImage(image.data, self.im_width, self.im_height, QImage.Format.Format_RGB888)  # .rgbSwapped()
-        self.image_frame.setPixmap(QPixmap.fromImage(q_image))
+        if self.image is None:
+            q_image = QImage(image.data, self.im_width, self.im_height, QImage.Format.Format_RGB888)
+        else:
+            q_image = QImage(image.data, self.im_width, self.im_height, QImage.Format.Format_BGR888)
+        self.diagram_frame.setPixmap(QPixmap.fromImage(q_image))
 
     # generate new, random points
     def generate_random_points(self, num_points):
         # generate the new points
         self.points = []
-        self.point_colors = []
-        for _ in range(num_points):
-            x = random.randint(0, self.im_width)
-            y = random.randint(0, self.im_height)
+        while len(self.points) < num_points:
+            x = random.randint(0, self.im_width-1)
+            y = random.randint(0, self.im_height-1)
+            if (x, y) in self.points:
+                continue
             self.points.append((x, y))
-
-            self.point_colors.append(tuple(random.choices(range(256), k=3)))
-        # self.points = [(10, 10), (400, 400), (10, 400)]
         self.points = sorted(self.points)  # not necessary but may be nice
 
     def enable_all(self, t_f):
@@ -337,33 +368,54 @@ class MainWindow(QMainWindow):
 
     # mathematical approach to generating a colored voronoi diagram with the given points
     # https://gist.github.com/bert/1188638/78a80d1824ffb2b64c736550d62b3e770e5a45b5
-    def color_voronoi(self):
+    def generate_voronoi(self):
         self.enable_all(False)
+
+        time_1 = time()
+
+        self.progress_bar.resetFormat()
+        self.progress_bar.setValue(0)
 
         depth_map = None
         # the color map has a different integer for each area
         color_map = np.zeros((self.im_height, self.im_width), np.int32)
 
-        self.progress_bar.setValue(0)
+        image_colors = np.empty((len(self.points), 3), dtype=np.uint8)
 
-        def hypot(Y, X):
+        def hypotenuse(Y, X):
             return (X - x) ** 2 + (Y - y) ** 2
 
         for i, (x, y) in enumerate(self.points):
             # matrix with each cell representing the distance from it to the point
-            paraboloid = np.fromfunction(hypot, (self.im_height, self.im_width))
+            paraboloid = np.fromfunction(hypotenuse, (self.im_height, self.im_width))
             if i == 0:
                 depth_map = paraboloid.copy()
             else:
                 color_map = np.where(paraboloid < depth_map, i, color_map)
                 depth_map = np.where(paraboloid < depth_map, paraboloid, depth_map)
-            self.progress_bar.setValue(int((i+1)*100/len(self.points)))
+
+            if self.image is None:
+                image_colors[i] = random.choices(range(256), k=3)
+            # else:
+            #     image_colors[i] = self.image[y][x]
+
+            self.progress_bar.setValue(int((i + 1) * 90 / len(self.points)))
 
         # clear the diagram
         self.voronoi_diagram = np.empty((self.im_height, self.im_width, 3), np.int8)
-        self.point_colors = np.array(self.point_colors)
-        # give each area of the color map a color and put it in the diagram
-        self.voronoi_diagram[:, :, ] = self.point_colors[color_map]
+        if self.image is None:
+            # apply random colors to each cell
+            self.voronoi_diagram[:, :, ] = image_colors[color_map]
+        else:
+            # compute each cells color as the average of all pixels in the cell
+            for i in range(len(self.points)):
+                mask = np.where(color_map == i, 255, 0)
+                mask = mask.astype(np.uint8)
+                res = cv2.mean(self.image, mask)
+                res = [int(x) for x in res[:3]]
+                image_colors[i] = res
+                self.progress_bar.setValue(90 + int((i + 1) * 10 / len(self.points)))
+            self.voronoi_diagram[:, :, ] = image_colors[color_map]
 
         # find the lines (borders between colors)
         # vertical borders
@@ -372,7 +424,11 @@ class MainWindow(QMainWindow):
         # horizontal borders
         h_lines = np.where(color_map[:, :-1] != color_map[:, 1:], True, False)
         h_lines = np.hstack([[[False]] * self.im_height, h_lines])
+        # combine and save it
         self.line_diagram = h_lines | v_lines
+
+        self.progress_bar.setValue(100)
+        self.progress_bar.setFormat(str(round(time()-time_1, 1)) + " s")
 
         self.enable_all(True)
 
