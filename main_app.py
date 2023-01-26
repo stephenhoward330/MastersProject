@@ -8,65 +8,12 @@ from PyQt6.QtWidgets import *
 from PyQt6.QtCore import Qt
 from time import time
 
-# SCALE = 1.0
-#
-#
-# class Box(QWidget):
-#     def __init__(self, points=None):
-#         super(QWidget, self).__init__()
-#         self.setMinimumSize(600, 600)
-#         self.data_range = {'x': [-SCALE, SCALE], 'y': [-SCALE, SCALE]}
-#         if points is None:
-#             self.points = self.generate_random_points()
-#         else:
-#             self.points = points
-#         self.update()
-#
-#     def generate_random_points(self, num_points=100):
-#         pt_list = []
-#         xr = self.data_range['x']
-#         yr = self.data_range['y']
-#         for _ in range(num_points):
-#             x = random.uniform(0.0, 1.0)
-#             y = random.uniform(0.0, 1.0)
-#             # if not x in known_xvals:
-#             #     known_xvals[x] = True
-#             x_val = xr[0] + (xr[1] - xr[0]) * x
-#             y_val = yr[0] + (yr[1] - yr[0]) * y
-#             pt_list.append(QPointF(x_val, y_val))
-#         return pt_list
-#
-#     def get_scale(self):
-#         xr = self.data_range['x']
-#         yr = self.data_range['y']
-#         w = self.width()
-#         h = self.height()
-#         w2h_desired_ratio = (xr[1] - xr[0]) / (yr[1] - yr[0])
-#         if w / h < w2h_desired_ratio:
-#             scale = w / (xr[1] - xr[0])
-#         else:
-#             scale = h / (yr[1] - yr[0])
-#         return scale
-#
-#     def paintEvent(self, event):
-#         scale = self.get_scale()
-#
-#         painter = QPainter(self)
-#         transform = QTransform()
-#         transform.translate(self.width() / 2.0, self.height() / 2.0)
-#         transform.scale(1.0, -1.0)
-#         painter.setTransform(transform)
-#         painter.setPen(QColor(0, 0, 0))
-#         for point in self.points:
-#             pt = QPointF(scale * point.x(), scale * point.y())
-#             painter.drawEllipse(pt, 1.0, 1.0)
-
 DEFAULT_WIDTH = 600
 DEFAULT_HEIGHT = 500
 DEFAULT_NUM_POINTS = 500
 
 # TODO: allow the user to save the result to file
-# TODO: sample more points in darker regions of the image
+# TODO: sample more points in high-variance parts of the image
 
 
 class MainWindow(QMainWindow):
@@ -105,7 +52,15 @@ class MainWindow(QMainWindow):
 
         # add the diagram frame
         self.diagram_frame = QLabel()
+        self.diagram_frame.setMinimumHeight(DEFAULT_HEIGHT)
+        self.diagram_frame.setMinimumWidth(DEFAULT_WIDTH)
+        self.diagram_frame.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.diagram_frame)
+
+        # add the 'upload image' button
+        self.upload_image_button = QPushButton("Upload Image")
+        self.upload_image_button.clicked.connect(self.upload_image_clicked)
+        layout.addWidget(self.upload_image_button)
 
         h = QHBoxLayout()
         # add the 'number of points' text and box
@@ -114,13 +69,15 @@ class MainWindow(QMainWindow):
         self.num_points_field.setFixedWidth(75)
         self.num_points_field.textChanged.connect(self.check_input)
         h.addWidget(self.num_points_field)
-        self.generate_points_button = QPushButton("Generate Random Points")
-        self.generate_points_button.clicked.connect(self.generate_points_clicked)
-        h.addWidget(self.generate_points_button)
-        # add the 'generate points' button
-        self.upload_image_button = QPushButton("Upload Image")
-        self.upload_image_button.clicked.connect(self.upload_image_clicked)
-        h.addWidget(self.upload_image_button)
+        # add the 'generate random points' button
+        self.generate_random_points_button = QPushButton("Generate Random Points")
+        self.generate_random_points_button.clicked.connect(self.generate_random_clicked)
+        h.addWidget(self.generate_random_points_button)
+        # add the 'generate smart points' button
+        self.generate_smart_points_button = QPushButton("Generate Smart Points")
+        self.generate_smart_points_button.clicked.connect(self.generate_smart_clicked)
+        self.generate_smart_points_button.setEnabled(False)
+        h.addWidget(self.generate_smart_points_button)
         layout.addLayout(h)
 
         h = QHBoxLayout()
@@ -140,11 +97,7 @@ class MainWindow(QMainWindow):
         self.toggle_colors_box.setChecked(True)
         self.toggle_colors_box.stateChanged.connect(self.toggle_colors_clicked)
         h.addWidget(self.toggle_colors_box)
-        # add the 'generate line voronoi' button
-        # self.line_voronoi_button = QPushButton("Generate Line Voronoi")
-        # self.line_voronoi_button.clicked.connect(self.line_voronoi_clicked)
-        # h.addWidget(self.line_voronoi_button)
-        # add the 'generate color voronoi' button
+        # add the 'generate voronoi' button
         self.color_voronoi_button = QPushButton("Generate Voronoi Diagram")
         self.color_voronoi_button.clicked.connect(self.color_voronoi_clicked)
         h.addWidget(self.color_voronoi_button)
@@ -164,17 +117,20 @@ class MainWindow(QMainWindow):
         # show the window
         self.show()
 
-    def generate_points_clicked(self):
-        print("generate points clicked")
+    def generate_random_clicked(self):
         self.generate_random_points(int(self.num_points_field.text()))
         # clear the frame and reset it with the new points
         # self.im_height = DEFAULT_HEIGHT
         # self.im_width = DEFAULT_WIDTH
         self.set_diagram(reset=True)
 
+    def generate_smart_clicked(self):
+        self.generate_smart_points(int(self.num_points_field.text()))
+        # clear the frame and reset it with the new points
+        self.set_diagram(reset=True)
+
     def upload_image_clicked(self):
         if self.image is None:
-            print("upload image clicked")
             image_files = None
 
             dialog = QFileDialog(self)
@@ -204,11 +160,11 @@ class MainWindow(QMainWindow):
 
                 self.set_diagram(reset=True)
                 self.upload_image_button.setText("Clear Image")
+                self.check_input()
             except Exception as e:
                 print(e)
                 quit()
         else:
-            print("clear image clicked")
             self.image = None
             # self.im_height = DEFAULT_HEIGHT
             # self.im_width = DEFAULT_WIDTH
@@ -218,9 +174,9 @@ class MainWindow(QMainWindow):
 
             self.set_diagram(reset=True)
             self.upload_image_button.setText("Upload Image")
+            self.generate_smart_points_button.setEnabled(False)
 
     def toggle_points_clicked(self, checked):
-        print("toggle points clicked", checked)
         if checked:
             self.show_points = True
         else:
@@ -228,7 +184,6 @@ class MainWindow(QMainWindow):
         self.set_diagram()
 
     def toggle_lines_clicked(self, checked):
-        print("toggle lines clicked", checked)
         if checked:
             self.show_lines = True
         else:
@@ -236,29 +191,25 @@ class MainWindow(QMainWindow):
         self.set_diagram()
 
     def toggle_colors_clicked(self, checked):
-        print("toggle colors clicked", checked)
         if checked:
             self.show_colors = True
         else:
             self.show_colors = False
         self.set_diagram()
 
-    # def line_voronoi_clicked(self):
-    #     print("line voronoi clicked")
-    #     self.my_voronoi()
-    #     self.set_diagram()
-
     def color_voronoi_clicked(self):
-        print("color voronoi clicked")
         self.generate_voronoi()
         self.set_diagram()
 
     # check input of the 'num points' field
     def check_input(self):
         if self.num_points_field.text().isdigit() and int(self.num_points_field.text()) >= 1:
-            self.generate_points_button.setEnabled(True)
+            self.generate_random_points_button.setEnabled(True)
+            if self.image is not None:
+                self.generate_smart_points_button.setEnabled(True)
         else:
-            self.generate_points_button.setEnabled(False)
+            self.generate_random_points_button.setEnabled(False)
+            self.generate_smart_points_button.setEnabled(False)
 
     # sets the voronoi_diagram in the frame
     # adds points to the diagram if desired
@@ -302,7 +253,6 @@ class MainWindow(QMainWindow):
 
     # generate new, random points
     def generate_random_points(self, num_points):
-        # generate the new points
         self.points = []
         while len(self.points) < num_points:
             x = random.randint(0, self.im_width-1)
@@ -312,59 +262,37 @@ class MainWindow(QMainWindow):
             self.points.append((x, y))
         self.points = sorted(self.points)  # not necessary but may be nice
 
+    # generate new, smart points
+    def generate_smart_points(self, num_points):
+        self.points = []
+        pixels = []
+        weights = []
+        for i in range(len(self.image)):
+            for j in range(len(self.image[i])):
+                pixels.append((j, i))
+                # sample dark pixels more (a white pixel sums to 765)
+                weights.append(768 - self.image[i][j][0] - self.image[i][j][1] - self.image[i][j][2])
+        self.points = random.choices(pixels, weights, k=num_points)
+        # h_var = np.var(self.image, 0)
+        # print(h_var.shape, h_var[0], h_var[300], h_var[-1])
+        # print(np.max(h_var, 0))
+        # v_var = np.var(self.image, 1)
+        # print(v_var.shape, v_var[0], v_var[250], v_var[-1])
+        # print(np.max(v_var, 0))
+        self.points = sorted(self.points)  # not necessary but may be nice
+
     def enable_all(self, t_f):
         self.num_points_field.setEnabled(t_f)
-        self.generate_points_button.setEnabled(t_f)
+        # the next two may be disabled by check_input
+        self.generate_random_points_button.setEnabled(t_f)
+        self.generate_smart_points_button.setEnabled(t_f)
         self.upload_image_button.setEnabled(t_f)
-        # self.line_voronoi_button.setEnabled(t_f)
         self.color_voronoi_button.setEnabled(t_f)
         self.toggle_points_box.setEnabled(t_f)
         self.toggle_lines_box.setEnabled(t_f)
         self.toggle_colors_box.setEnabled(t_f)
         if t_f:
             self.check_input()
-
-    # my naive approach to generating just the lines of a voronoi diagram with the given points
-    # def my_voronoi(self):
-    #     self.enable_all(False)
-    #     self.voronoi_diagram = np.full((HEIGHT, WIDTH, 3), 255, np.uint8)
-    #
-    #     self.points = sorted(self.points)  # , key=lambda k: [k[1], k[0]])
-    #
-    #     self.progress_bar.setValue(0)
-    #
-    #     length = len(self.voronoi_diagram)
-    #     for i in tqdm(range(length)):
-    #         for j in range(len(self.voronoi_diagram[i])):
-    #             min_dist = np.inf
-    #             min_dist_ctr = 0
-    #             for point in self.points:
-    #                 # we are too far to be considered as the closest point
-    #                 if abs(j - point[0]) > min_dist or abs(i - point[1]) > min_dist:
-    #                     continue
-    #
-    #                 pixel = np.array((j, i))
-    #                 np_point = np.array(point)
-    #                 dist = round(np.linalg.norm(pixel - np_point))
-    #
-    #                 # update the minimum distance
-    #                 if dist < min_dist:
-    #                     min_dist = dist
-    #                     min_dist_ctr = 1
-    #                 # if two points have the same distance to the pixel, note it
-    #                 elif dist == min_dist:
-    #                     min_dist_ctr += 1
-    #                 # the remaining points won't be closer than the min distance (since the points are sorted)
-    #                 elif j - point[0] > min_dist:
-    #                     break
-    #
-    #             # this pixel is in between two points, paint it black
-    #             if min_dist_ctr > 1:
-    #                 self.voronoi_diagram[i][j] = (0, 0, 0)
-    #
-    #         self.progress_bar.setValue(int((i+1)*100/length))
-    #
-    #     self.enable_all(True)
 
     # mathematical approach to generating a colored voronoi diagram with the given points
     # https://gist.github.com/bert/1188638/78a80d1824ffb2b64c736550d62b3e770e5a45b5
@@ -407,7 +335,7 @@ class MainWindow(QMainWindow):
             # apply random colors to each cell
             self.voronoi_diagram[:, :, ] = image_colors[color_map]
         else:
-            # compute each cells color as the average of all pixels in the cell
+            # compute each cell's color as the average of all pixels in the cell
             for i in range(len(self.points)):
                 mask = np.where(color_map == i, 255, 0)
                 mask = mask.astype(np.uint8)
