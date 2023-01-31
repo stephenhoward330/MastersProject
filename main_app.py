@@ -292,6 +292,8 @@ class MainWindow(QMainWindow):
         c_edges = cv2.addWeighted(c_edges, 1.0, up_edges, 1.0, 0.0)
         c_edges = cv2.addWeighted(c_edges, 1.0, left_edges, 1.0, 0.0)
 
+        # cv2.imwrite("c.png", c_edges)
+
         pixels = []
         weights = []
         for i in range(len(c_edges)):
