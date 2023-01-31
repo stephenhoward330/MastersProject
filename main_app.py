@@ -14,6 +14,7 @@ DEFAULT_NUM_POINTS = 500
 
 # TODO: allow the user to save the result to file
 # TODO: sample more points in high-variance parts of the image
+# TODO: sample points on both sides of borders
 
 
 class MainWindow(QMainWindow):
@@ -226,7 +227,7 @@ class MainWindow(QMainWindow):
 
         # add the points to the canvas (or not)
         if self.show_points:
-            if len(self.points) >= 2000:
+            if len(self.points) >= 3000:
                 radius = 0
             elif len(self.points) >= 200:
                 radius = 1
@@ -265,20 +266,40 @@ class MainWindow(QMainWindow):
     # generate new, smart points
     def generate_smart_points(self, num_points):
         self.points = []
+
+        # sample dark areas more
+        # pixels = []
+        # weights = []
+        # for i in range(len(self.image)):
+        #     for j in range(len(self.image[i])):
+        #         pixels.append((j, i))
+        #         # sample dark pixels more (a white pixel sums to 765)
+        #         weights.append(768 - self.image[i][j][0] - self.image[i][j][1] - self.image[i][j][2])
+        # self.points = random.choices(pixels, weights, k=num_points)
+
+        # define the vertical filter
+        vertical_filter = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]])
+
+        # define the horizontal filter
+        horizontal_filter = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]])
+
+        down_edges = cv2.filter2D(self.image, -1, vertical_filter)
+        right_edges = cv2.filter2D(self.image, -1, horizontal_filter)
+        up_edges = cv2.filter2D(self.image, -1, vertical_filter*-1)
+        left_edges = cv2.filter2D(self.image, -1, horizontal_filter*-1)
+
+        c_edges = cv2.addWeighted(down_edges, 1.0, right_edges, 1.0, 0.0)
+        c_edges = cv2.addWeighted(c_edges, 1.0, up_edges, 1.0, 0.0)
+        c_edges = cv2.addWeighted(c_edges, 1.0, left_edges, 1.0, 0.0)
+
         pixels = []
         weights = []
-        for i in range(len(self.image)):
-            for j in range(len(self.image[i])):
+        for i in range(len(c_edges)):
+            for j in range(len(c_edges[i])):
                 pixels.append((j, i))
-                # sample dark pixels more (a white pixel sums to 765)
-                weights.append(768 - self.image[i][j][0] - self.image[i][j][1] - self.image[i][j][2])
+                weights.append(-10 + c_edges[i][j][0] + c_edges[i][j][1] + c_edges[i][j][2])
         self.points = random.choices(pixels, weights, k=num_points)
-        # h_var = np.var(self.image, 0)
-        # print(h_var.shape, h_var[0], h_var[300], h_var[-1])
-        # print(np.max(h_var, 0))
-        # v_var = np.var(self.image, 1)
-        # print(v_var.shape, v_var[0], v_var[250], v_var[-1])
-        # print(np.max(v_var, 0))
+
         self.points = sorted(self.points)  # not necessary but may be nice
 
     def enable_all(self, t_f):
