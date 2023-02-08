@@ -12,7 +12,7 @@ if __name__ == '__main__':
     src_lab = cv2.cvtColor(blurred, cv2.COLOR_BGR2LAB)  # convert to LAB
 
     # SLIC
-    cv_slic = ximg.createSuperpixelSLIC(src_lab, algorithm=ximg.SLICO, region_size=16)
+    cv_slic = ximg.createSuperpixelSLIC(src_lab, algorithm=ximg.SLICO, region_size=8)
     cv_slic.iterate(10)
     labels = cv_slic.getLabels()
     num_regions = cv_slic.getNumberOfSuperpixels()
@@ -28,5 +28,5 @@ if __name__ == '__main__':
 
     result = image_colors[labels]
 
-    cv2.imwrite("images/nick_slic.png", result)
+    cv2.imwrite("outputs/nick_slic.png", result)
     print("Num superpixels:", num_regions)

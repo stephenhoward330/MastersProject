@@ -11,11 +11,13 @@ from time import time
 DEFAULT_WIDTH = 600
 DEFAULT_HEIGHT = 500
 DEFAULT_NUM_POINTS = 500
+DEFAULT_REGION_SIZE = 16
 
 
 # TODO: sample points on both sides of borders
-# TODO: look at super pixels
 # TODO: look at evenly spaced points
+# TODO: finish integrating superpixels
+# TODO: add a switch between voronoi and superpixel mode
 
 
 class MainWindow(QMainWindow):
@@ -34,7 +36,6 @@ class MainWindow(QMainWindow):
         self.im_width = DEFAULT_WIDTH
 
         self.progress = 0
-
         self.points = []
 
         self.setWindowTitle("Voronoi Art Maker")
@@ -70,6 +71,10 @@ class MainWindow(QMainWindow):
         h.addWidget(self.save_image_button)
         layout.addLayout(h)
 
+        frame = QFrame()
+
+        # ################ VORONOI SECTION
+        v = QVBoxLayout()
         h = QHBoxLayout()
         # add the 'number of points' text and box
         h.addWidget(QLabel('Number of Points: '))
@@ -86,7 +91,7 @@ class MainWindow(QMainWindow):
         self.generate_smart_points_button.clicked.connect(self.generate_smart_clicked)
         self.generate_smart_points_button.setEnabled(False)
         h.addWidget(self.generate_smart_points_button)
-        layout.addLayout(h)
+        v.addLayout(h)
 
         h = QHBoxLayout()
         h.addWidget(QLabel('Show:'))
@@ -107,9 +112,29 @@ class MainWindow(QMainWindow):
         h.addWidget(self.toggle_colors_box)
         # add the 'generate voronoi' button
         self.color_voronoi_button = QPushButton("Generate Voronoi Diagram")
-        self.color_voronoi_button.clicked.connect(self.color_voronoi_clicked)
+        self.color_voronoi_button.clicked.connect(self.generate_voronoi_clicked)
         h.addWidget(self.color_voronoi_button)
-        layout.addLayout(h)
+        v.addLayout(h)
+        # layout.addLayout(v)
+
+        # TODO: use this superpixel layout stuff
+        # ################ SUPERPIXEL SECTION
+        s = QVBoxLayout()
+        h = QHBoxLayout()
+        # add the 'number of regions' text and box
+        h.addWidget(QLabel('Region Size: '))
+        self.region_size_field = QLineEdit(str(DEFAULT_REGION_SIZE))
+        # self.num_points_field.setFixedWidth(75)
+        self.region_size_field.textChanged.connect(self.check_input)
+        h.addWidget(self.region_size_field)
+        # add the 'generate random points' button
+        self.generate_superpixels_button = QPushButton("Generate Superpixels")
+        self.generate_superpixels_button.clicked.connect(self.generate_superpixels_clicked)
+        h.addWidget(self.generate_superpixels_button)
+        s.addLayout(h)
+
+        frame.setLayout(v)
+        layout.addWidget(frame)
 
         # add the progress bar
         h = QHBoxLayout()
@@ -145,7 +170,7 @@ class MainWindow(QMainWindow):
             dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
             dialog.setNameFilter("Image (*.png *.jpg *.jpeg)")
             dialog.setViewMode(QFileDialog.ViewMode.List)
-            dialog.setDirectory(QDir.currentPath())
+            dialog.setDirectory(QDir.currentPath()+'/images')
             dialog.setWindowTitle("Open Image")
 
             if dialog.exec():
@@ -186,7 +211,8 @@ class MainWindow(QMainWindow):
             self.generate_smart_points_button.setEnabled(False)
 
     def save_image_clicked(self) -> None:
-        filename, _ = QFileDialog.getSaveFileName(self, "Save As", "result.png", "Image (*.png *.jpg *.jpeg)")
+        filename, _ = QFileDialog.getSaveFileName(self, "Save As", "outputs/result.png", "*.png;;*.jpg;;*.jpeg")
+        # "Image (*.png *.jpg *.jpeg)")
 
         if not (filename[-4:] == '.png' or filename[-4:] == '.jpg' or filename[-5:] == '.jpeg'):
             print("BAD FILE EXTENSION")
@@ -226,9 +252,75 @@ class MainWindow(QMainWindow):
             self.show_colors = False
         self.set_diagram()
 
-    def color_voronoi_clicked(self) -> None:
-        self.generate_voronoi()
+    # mathematical approach to generating a colored voronoi diagram with the given points
+    # https://gist.github.com/bert/1188638/78a80d1824ffb2b64c736550d62b3e770e5a45b5
+    def generate_voronoi_clicked(self) -> None:
+        self.enable_all(False)
+
+        time_1 = time()
+
+        self.progress_bar.resetFormat()
+        self.progress_bar.setValue(0)
+
+        depth_map = None
+        # the color map has a different integer for each area
+        color_map = np.zeros((self.im_height, self.im_width), np.int32)
+
+        image_colors = np.empty((len(self.points), 3), dtype=np.uint8)
+
+        def hypotenuse(Y, X):
+            return (X - x) ** 2 + (Y - y) ** 2
+
+        for i, (x, y) in enumerate(self.points):
+            # matrix with each cell representing the distance from it to the point
+            paraboloid = np.fromfunction(hypotenuse, (self.im_height, self.im_width))
+            if i == 0:
+                depth_map = paraboloid.copy()
+            else:
+                color_map = np.where(paraboloid < depth_map, i, color_map)
+                depth_map = np.where(paraboloid < depth_map, paraboloid, depth_map)
+
+            if self.image is None:
+                image_colors[i] = random.choices(range(256), k=3)
+            # else:
+            #     image_colors[i] = self.image[y][x]
+
+            self.progress_bar.setValue(int((i + 1) * 90 / len(self.points)))
+
+        # clear the diagram
+        self.voronoi_diagram = np.empty((self.im_height, self.im_width, 3), np.int8)
+        if self.image is None:
+            # apply random colors to each cell
+            self.voronoi_diagram[:, :, ] = image_colors[color_map]
+        else:
+            # compute each cell's color as the average of all pixels in the cell
+            for i in range(len(self.points)):
+                mask = np.where(color_map == i, 255, 0)
+                mask = mask.astype(np.uint8)
+                mean = cv2.mean(self.image, mask)
+                mean = [int(x) for x in mean[:3]]
+                image_colors[i] = mean
+                self.progress_bar.setValue(90 + int((i + 1) * 10 / len(self.points)))
+            self.voronoi_diagram[:, :, ] = image_colors[color_map]
+
+        # find the lines (borders between colors)
+        # vertical borders
+        v_lines = np.where(color_map[:-1] != color_map[1:], True, False)
+        v_lines = np.vstack([[False] * self.im_width, v_lines])
+        # horizontal borders
+        h_lines = np.where(color_map[:, :-1] != color_map[:, 1:], True, False)
+        h_lines = np.hstack([[[False]] * self.im_height, h_lines])
+        # combine and save it
+        self.line_diagram = h_lines | v_lines
+
+        self.progress_bar.setValue(100)
+        self.progress_bar.setFormat(str(round(time() - time_1, 1)) + " s")
+
+        self.enable_all(True)
         self.set_diagram()
+
+    def generate_superpixels_clicked(self) -> None:
+        print("generate superpixels clicked")
 
     # check input of the 'num points' field
     def check_input(self) -> None:
@@ -361,72 +453,6 @@ class MainWindow(QMainWindow):
         self.toggle_colors_box.setEnabled(t_f)
         if t_f:
             self.check_input()
-
-    # mathematical approach to generating a colored voronoi diagram with the given points
-    # https://gist.github.com/bert/1188638/78a80d1824ffb2b64c736550d62b3e770e5a45b5
-    def generate_voronoi(self) -> None:
-        self.enable_all(False)
-
-        time_1 = time()
-
-        self.progress_bar.resetFormat()
-        self.progress_bar.setValue(0)
-
-        depth_map = None
-        # the color map has a different integer for each area
-        color_map = np.zeros((self.im_height, self.im_width), np.int32)
-
-        image_colors = np.empty((len(self.points), 3), dtype=np.uint8)
-
-        def hypotenuse(Y, X):
-            return (X - x) ** 2 + (Y - y) ** 2
-
-        for i, (x, y) in enumerate(self.points):
-            # matrix with each cell representing the distance from it to the point
-            paraboloid = np.fromfunction(hypotenuse, (self.im_height, self.im_width))
-            if i == 0:
-                depth_map = paraboloid.copy()
-            else:
-                color_map = np.where(paraboloid < depth_map, i, color_map)
-                depth_map = np.where(paraboloid < depth_map, paraboloid, depth_map)
-
-            if self.image is None:
-                image_colors[i] = random.choices(range(256), k=3)
-            # else:
-            #     image_colors[i] = self.image[y][x]
-
-            self.progress_bar.setValue(int((i + 1) * 90 / len(self.points)))
-
-        # clear the diagram
-        self.voronoi_diagram = np.empty((self.im_height, self.im_width, 3), np.int8)
-        if self.image is None:
-            # apply random colors to each cell
-            self.voronoi_diagram[:, :, ] = image_colors[color_map]
-        else:
-            # compute each cell's color as the average of all pixels in the cell
-            for i in range(len(self.points)):
-                mask = np.where(color_map == i, 255, 0)
-                mask = mask.astype(np.uint8)
-                mean = cv2.mean(self.image, mask)
-                mean = [int(x) for x in mean[:3]]
-                image_colors[i] = mean
-                self.progress_bar.setValue(90 + int((i + 1) * 10 / len(self.points)))
-            self.voronoi_diagram[:, :, ] = image_colors[color_map]
-
-        # find the lines (borders between colors)
-        # vertical borders
-        v_lines = np.where(color_map[:-1] != color_map[1:], True, False)
-        v_lines = np.vstack([[False] * self.im_width, v_lines])
-        # horizontal borders
-        h_lines = np.where(color_map[:, :-1] != color_map[:, 1:], True, False)
-        h_lines = np.hstack([[[False]] * self.im_height, h_lines])
-        # combine and save it
-        self.line_diagram = h_lines | v_lines
-
-        self.progress_bar.setValue(100)
-        self.progress_bar.setFormat(str(round(time() - time_1, 1)) + " s")
-
-        self.enable_all(True)
 
 
 if __name__ == '__main__':
