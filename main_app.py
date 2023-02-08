@@ -1,6 +1,7 @@
 import sys
 
 import cv2
+import cv2.ximgproc as ximg
 import numpy as np
 import random
 from PyQt6.QtGui import QImage, QPixmap
@@ -12,19 +13,20 @@ DEFAULT_WIDTH = 600
 DEFAULT_HEIGHT = 500
 DEFAULT_NUM_POINTS = 500
 DEFAULT_REGION_SIZE = 16
+DEFAULT_ITERATIONS = 10
 
 
 # TODO: sample points on both sides of borders
 # TODO: look at evenly spaced points
-# TODO: finish integrating superpixels
-# TODO: add a switch between voronoi and superpixel mode
+# TODO: draw lines on superpixels and toggle on/off
+# TODO: use the progress bar with superpixels?
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
 
-        self.voronoi_diagram = np.full((DEFAULT_HEIGHT, DEFAULT_WIDTH, 3), 255, np.uint8)
+        self.diagram = np.full((DEFAULT_HEIGHT, DEFAULT_WIDTH, 3), 255, np.uint8)
         self.line_diagram = None
         self.image = None
 
@@ -39,11 +41,11 @@ class MainWindow(QMainWindow):
         self.points = []
 
         self.setWindowTitle("Voronoi Art Maker")
-        layout = QVBoxLayout()
+        self.main_layout = QVBoxLayout()
         main_widget = QWidget()
 
         # Set the central widget of the Window
-        main_widget.setLayout(layout)
+        main_widget.setLayout(self.main_layout)
         self.setCentralWidget(main_widget)
 
         # add the image frame
@@ -51,14 +53,14 @@ class MainWindow(QMainWindow):
         self.image_frame.setMinimumHeight(DEFAULT_HEIGHT)
         self.image_frame.setMinimumWidth(DEFAULT_WIDTH)
         self.image_frame.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.image_frame)
+        self.main_layout.addWidget(self.image_frame)
 
         # add the diagram frame
         self.diagram_frame = QLabel()
         self.diagram_frame.setMinimumHeight(DEFAULT_HEIGHT)
         self.diagram_frame.setMinimumWidth(DEFAULT_WIDTH)
         self.diagram_frame.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.diagram_frame)
+        self.main_layout.addWidget(self.diagram_frame)
 
         h = QHBoxLayout()
         # add the 'upload image' button
@@ -69,18 +71,27 @@ class MainWindow(QMainWindow):
         self.save_image_button = QPushButton("Save Image")
         self.save_image_button.clicked.connect(self.save_image_clicked)
         h.addWidget(self.save_image_button)
-        layout.addLayout(h)
 
-        frame = QFrame()
+        # add the voronoi and superpixel radio buttons
+        # h.addWidget(QLabel('Mode: '))
+        self.v_radio_button = QRadioButton("Voronoi Mode")
+        self.v_radio_button.setChecked(True)
+        self.v_radio_button.toggled.connect(self.voronoi_mode_clicked)
+        h.addWidget(self.v_radio_button)
+        self.s_radio_button = QRadioButton("Superpixel Mode")
+        self.s_radio_button.toggled.connect(self.superpixel_mode_clicked)
+        h.addWidget(self.s_radio_button)
+        self.main_layout.addLayout(h)
 
         # ################ VORONOI SECTION
-        v = QVBoxLayout()
+        self.voronoi_frame = QFrame()
+        self.voronoi_layout = QVBoxLayout()
         h = QHBoxLayout()
         # add the 'number of points' text and box
         h.addWidget(QLabel('Number of Points: '))
         self.num_points_field = QLineEdit(str(DEFAULT_NUM_POINTS))
         self.num_points_field.setFixedWidth(75)
-        self.num_points_field.textChanged.connect(self.check_input)
+        self.num_points_field.textChanged.connect(self.check_points_input)
         h.addWidget(self.num_points_field)
         # add the 'generate random points' button
         self.generate_random_points_button = QPushButton("Generate Random Points")
@@ -91,7 +102,7 @@ class MainWindow(QMainWindow):
         self.generate_smart_points_button.clicked.connect(self.generate_smart_clicked)
         self.generate_smart_points_button.setEnabled(False)
         h.addWidget(self.generate_smart_points_button)
-        v.addLayout(h)
+        self.voronoi_layout.addLayout(h)
 
         h = QHBoxLayout()
         h.addWidget(QLabel('Show:'))
@@ -111,30 +122,39 @@ class MainWindow(QMainWindow):
         self.toggle_colors_box.stateChanged.connect(self.toggle_colors_clicked)
         h.addWidget(self.toggle_colors_box)
         # add the 'generate voronoi' button
-        self.color_voronoi_button = QPushButton("Generate Voronoi Diagram")
-        self.color_voronoi_button.clicked.connect(self.generate_voronoi_clicked)
-        h.addWidget(self.color_voronoi_button)
-        v.addLayout(h)
+        self.generate_voronoi_button = QPushButton("Generate Voronoi Diagram")
+        self.generate_voronoi_button.clicked.connect(self.generate_voronoi_clicked)
+        h.addWidget(self.generate_voronoi_button)
+        self.voronoi_layout.addLayout(h)
         # layout.addLayout(v)
+
+        self.voronoi_frame.setLayout(self.voronoi_layout)
+        self.main_layout.addWidget(self.voronoi_frame)
+        self.mode = "voronoi"
 
         # TODO: use this superpixel layout stuff
         # ################ SUPERPIXEL SECTION
-        s = QVBoxLayout()
+        self.superpixel_frame = QFrame()
+        self.superpixel_layout = QVBoxLayout()
         h = QHBoxLayout()
         # add the 'number of regions' text and box
         h.addWidget(QLabel('Region Size: '))
         self.region_size_field = QLineEdit(str(DEFAULT_REGION_SIZE))
-        # self.num_points_field.setFixedWidth(75)
-        self.region_size_field.textChanged.connect(self.check_input)
+        self.region_size_field.textChanged.connect(self.check_region_input)
         h.addWidget(self.region_size_field)
-        # add the 'generate random points' button
+        h.addWidget(QLabel('Iterations: '))
+        self.iterations_field = QLineEdit(str(DEFAULT_ITERATIONS))
+        self.iterations_field.textChanged.connect(self.check_iterations_input)
+        h.addWidget(self.iterations_field)
+        # add the 'generate superpixels' button
         self.generate_superpixels_button = QPushButton("Generate Superpixels")
         self.generate_superpixels_button.clicked.connect(self.generate_superpixels_clicked)
         h.addWidget(self.generate_superpixels_button)
-        s.addLayout(h)
+        self.superpixel_layout.addLayout(h)
 
-        frame.setLayout(v)
-        layout.addWidget(frame)
+        self.superpixel_frame.setLayout(self.superpixel_layout)
+        self.main_layout.addWidget(self.superpixel_frame)
+        self.superpixel_frame.hide()
 
         # add the progress bar
         h = QHBoxLayout()
@@ -142,25 +162,13 @@ class MainWindow(QMainWindow):
         self.progress_bar = QProgressBar()
         # self.progress_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
         h.addWidget(self.progress_bar)
-        layout.addLayout(h)
+        self.main_layout.addLayout(h)
 
         self.generate_random_points(DEFAULT_NUM_POINTS)
         self.set_diagram()
 
         # show the window
         self.show()
-
-    def generate_random_clicked(self) -> None:
-        self.generate_random_points(int(self.num_points_field.text()))
-        # clear the frame and reset it with the new points
-        # self.im_height = DEFAULT_HEIGHT
-        # self.im_width = DEFAULT_WIDTH
-        self.set_diagram(reset=True)
-
-    def generate_smart_clicked(self) -> None:
-        self.generate_smart_points(int(self.num_points_field.text()))
-        # clear the frame and reset it with the new points
-        self.set_diagram(reset=True)
 
     def upload_image_clicked(self) -> None:
         if self.image is None:
@@ -181,7 +189,6 @@ class MainWindow(QMainWindow):
             # if len(image_files) > 1:  # impossible with 'ExistingFile'
             #     print("Multiple files entered, using the first")
             image_file = image_files[0]
-            print(image_file)
             try:
                 image = cv2.imread(image_file, cv2.IMREAD_COLOR)
                 # print(image.shape)
@@ -194,9 +201,9 @@ class MainWindow(QMainWindow):
 
                 self.set_diagram(reset=True)
                 self.upload_image_button.setText("Clear Image")
-                self.check_input()
+                self.check_points_input()
             except Exception as e:
-                print(e)
+                print("Exception during file open:", e)
                 quit()
         else:
             self.image = None
@@ -214,6 +221,9 @@ class MainWindow(QMainWindow):
         filename, _ = QFileDialog.getSaveFileName(self, "Save As", "outputs/result.png", "*.png;;*.jpg;;*.jpeg")
         # "Image (*.png *.jpg *.jpeg)")
 
+        if filename == "":
+            print("None entered")
+            return
         if not (filename[-4:] == '.png' or filename[-4:] == '.jpg' or filename[-5:] == '.jpeg'):
             print("BAD FILE EXTENSION")
             return
@@ -230,6 +240,33 @@ class MainWindow(QMainWindow):
                 print("file save failed")
         except Exception as e:
             print("Exception during file save:", e)
+            quit()
+
+    def voronoi_mode_clicked(self, checked: bool) -> None:
+        if checked:
+            self.mode = "voronoi"
+            self.superpixel_frame.hide()
+            self.voronoi_frame.show()
+            self.set_diagram(reset=True)
+
+    def superpixel_mode_clicked(self, checked: bool) -> None:
+        if checked:
+            self.mode = "superpixel"
+            self.voronoi_frame.hide()
+            self.superpixel_frame.show()
+            self.set_diagram(reset=True)
+
+    def generate_random_clicked(self) -> None:
+        self.generate_random_points(int(self.num_points_field.text()))
+        # clear the frame and reset it with the new points
+        # self.im_height = DEFAULT_HEIGHT
+        # self.im_width = DEFAULT_WIDTH
+        self.set_diagram(reset=True)
+
+    def generate_smart_clicked(self) -> None:
+        self.generate_smart_points(int(self.num_points_field.text()))
+        # clear the frame and reset it with the new points
+        self.set_diagram(reset=True)
 
     def toggle_points_clicked(self, checked: bool) -> None:
         if checked:
@@ -266,8 +303,6 @@ class MainWindow(QMainWindow):
         # the color map has a different integer for each area
         color_map = np.zeros((self.im_height, self.im_width), np.int32)
 
-        image_colors = np.empty((len(self.points), 3), dtype=np.uint8)
-
         def hypotenuse(Y, X):
             return (X - x) ** 2 + (Y - y) ** 2
 
@@ -280,28 +315,22 @@ class MainWindow(QMainWindow):
                 color_map = np.where(paraboloid < depth_map, i, color_map)
                 depth_map = np.where(paraboloid < depth_map, paraboloid, depth_map)
 
-            if self.image is None:
-                image_colors[i] = random.choices(range(256), k=3)
-            # else:
-            #     image_colors[i] = self.image[y][x]
-
             self.progress_bar.setValue(int((i + 1) * 90 / len(self.points)))
 
-        # clear the diagram
-        self.voronoi_diagram = np.empty((self.im_height, self.im_width, 3), np.int8)
-        if self.image is None:
-            # apply random colors to each cell
-            self.voronoi_diagram[:, :, ] = image_colors[color_map]
-        else:
-            # compute each cell's color as the average of all pixels in the cell
-            for i in range(len(self.points)):
+        image_colors = np.empty((len(self.points), 3), dtype=np.uint8)
+
+        for i in range(len(self.points)):
+            if self.image is None:
+                image_colors[i] = random.choices(range(256), k=3)
+            else:
+                # compute each cell's color as the average of all pixels in the cell
                 mask = np.where(color_map == i, 255, 0)
                 mask = mask.astype(np.uint8)
                 mean = cv2.mean(self.image, mask)
                 mean = [int(x) for x in mean[:3]]
                 image_colors[i] = mean
                 self.progress_bar.setValue(90 + int((i + 1) * 10 / len(self.points)))
-            self.voronoi_diagram[:, :, ] = image_colors[color_map]
+        self.diagram = image_colors[color_map]
 
         # find the lines (borders between colors)
         # vertical borders
@@ -320,10 +349,43 @@ class MainWindow(QMainWindow):
         self.set_diagram()
 
     def generate_superpixels_clicked(self) -> None:
-        print("generate superpixels clicked")
+        if self.image is None:
+            im = np.full((self.im_height, self.im_width, 3), 255, np.uint8)
+        else:
+            im = self.image.copy()
+        # gaussian blur
+        im = cv2.GaussianBlur(im, (5, 5), 0)
+        # Convert to LAB
+        src_lab = cv2.cvtColor(im, cv2.COLOR_BGR2LAB)  # convert to LAB
+
+        # SLIC
+        cv_slic = ximg.createSuperpixelSLIC(src_lab, algorithm=ximg.SLICO,
+                                            region_size=int(self.region_size_field.text()))
+
+        # for _ in range(int(self.iterations_field.text())):
+        #     cv_slic.iterate(1)
+        cv_slic.iterate(int(self.iterations_field.text()))
+
+        labels = cv_slic.getLabels()
+        num_regions = cv_slic.getNumberOfSuperpixels()
+
+        image_colors = np.empty((num_regions, 3), dtype=np.uint8)
+
+        for i in range(num_regions):
+            if self.image is None:
+                image_colors[i] = random.choices(range(256), k=3)
+            else:
+                mask = np.where(labels == i, 255, 0)
+                mask = mask.astype(np.uint8)
+                mean = cv2.mean(self.image, mask)
+                mean = [int(x) for x in mean[:3]]
+                image_colors[i] = mean
+
+        self.diagram = image_colors[labels]
+        self.set_diagram()
 
     # check input of the 'num points' field
-    def check_input(self) -> None:
+    def check_points_input(self) -> None:
         if self.num_points_field.text().isdigit() and int(self.num_points_field.text()) >= 1:
             self.generate_random_points_button.setEnabled(True)
             if self.image is not None:
@@ -332,11 +394,23 @@ class MainWindow(QMainWindow):
             self.generate_random_points_button.setEnabled(False)
             self.generate_smart_points_button.setEnabled(False)
 
+    def check_region_input(self) -> None:
+        if self.region_size_field.text().isdigit() and int(self.region_size_field.text()) >= 1:
+            self.generate_superpixels_button.setEnabled(True)
+        else:
+            self.generate_superpixels_button.setEnabled(False)
+
+    def check_iterations_input(self) -> None:
+        if self.iterations_field.text().isdigit() and int(self.iterations_field.text()) >= 1:
+            self.generate_superpixels_button.setEnabled(True)
+        else:
+            self.generate_superpixels_button.setEnabled(False)
+
     # sets the voronoi_diagram in the frame
     def set_diagram(self, reset: bool = False) -> None:
         # get a new blank canvas
         if reset:
-            self.voronoi_diagram = np.full((self.im_height, self.im_width, 3), 255, np.uint8)
+            self.diagram = np.full((self.im_height, self.im_width, 3), 255, np.uint8)
             self.line_diagram = None
 
         image = self.draw_diagram()
@@ -349,12 +423,12 @@ class MainWindow(QMainWindow):
     def draw_diagram(self) -> np.ndarray:
         # get the colored diagram (or not)
         if self.show_colors:
-            image = self.voronoi_diagram.copy()
+            image = self.diagram.copy()
         else:
             image = np.full((self.im_height, self.im_width, 3), 255, np.uint8)
 
         # add the points to the canvas (or not)
-        if self.show_points:
+        if self.mode == "voronoi" and self.show_points:
             if len(self.points) >= 3000:
                 radius = 0
             elif len(self.points) >= 200:
@@ -443,16 +517,21 @@ class MainWindow(QMainWindow):
     def enable_all(self, t_f: bool) -> None:
         self.upload_image_button.setEnabled(t_f)
         self.save_image_button.setEnabled(t_f)
+        self.v_radio_button.setEnabled(t_f)
+        self.s_radio_button.setEnabled(t_f)
+
         self.num_points_field.setEnabled(t_f)
         # the next two may be disabled by check_input
         self.generate_random_points_button.setEnabled(t_f)
         self.generate_smart_points_button.setEnabled(t_f)
-        self.color_voronoi_button.setEnabled(t_f)
+
         self.toggle_points_box.setEnabled(t_f)
         self.toggle_lines_box.setEnabled(t_f)
         self.toggle_colors_box.setEnabled(t_f)
+        self.generate_voronoi_button.setEnabled(t_f)
+
         if t_f:
-            self.check_input()
+            self.check_points_input()
 
 
 if __name__ == '__main__':
