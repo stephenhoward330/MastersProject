@@ -11,14 +11,21 @@ from time import time
 
 DEFAULT_WIDTH = 600
 DEFAULT_HEIGHT = 500
-DEFAULT_NUM_POINTS = 500
+DEFAULT_NUM_POINTS = 1000
 DEFAULT_REGION_SIZE = 16
 DEFAULT_ITERATIONS = 20
 
 
 # TODO: sample points on both sides of borders
 # TODO: look at evenly spaced points for voronoi
+# TODO: use progress bar for smart points
 
+# TODO: allow for side-by-side frames
+
+# TODO: look at exporting files that a laser cutter would use
+# https://lib.byu.edu/services/laser-cutters/
+
+# TODO: extend to 3D
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -116,6 +123,10 @@ class MainWindow(QMainWindow):
         self.iterations_field = QLineEdit(str(DEFAULT_ITERATIONS))
         self.iterations_field.textChanged.connect(self.check_superpixel_input)
         h.addWidget(self.iterations_field)
+        # add the 'number of superpixels' text box
+        self.num_superpixels_field = QLabel('Superpixels: _____')
+        self.num_superpixels_field.setFixedWidth(150)
+        h.addWidget(self.num_superpixels_field)
 
         self.superpixel_frame.setLayout(h)
         self.main_layout.addWidget(self.superpixel_frame)
@@ -141,6 +152,7 @@ class MainWindow(QMainWindow):
         # add the 'generate voronoi' button
         self.generate_diagram_button = QPushButton("Generate Voronoi Diagram")
         self.generate_diagram_button.clicked.connect(self.generate_diagram_clicked)
+        self.generate_diagram_button.setFixedWidth(200)
         h.addWidget(self.generate_diagram_button)
         self.main_layout.addLayout(h)
         # layout.addLayout(v)
@@ -161,6 +173,7 @@ class MainWindow(QMainWindow):
 
     def upload_image_clicked(self) -> None:
         if self.image is None:
+            # upload image
             image_files = None
 
             dialog = QFileDialog(self)
@@ -195,6 +208,7 @@ class MainWindow(QMainWindow):
                 print("Exception during file open:", e)
                 quit()
         else:
+            # clear image
             self.image = None
             # self.im_height = DEFAULT_HEIGHT
             # self.im_width = DEFAULT_WIDTH
@@ -402,6 +416,8 @@ class MainWindow(QMainWindow):
         # combine and save it
         self.line_diagram = h_lines | v_lines
 
+        self.num_superpixels_field.setText('Superpixels: ' + str(num_regions))
+
         self.progress_bar.setValue(100)
         self.progress_bar.setFormat(str(round(time() - time_1, 1)) + " s")
 
@@ -431,6 +447,7 @@ class MainWindow(QMainWindow):
         if reset:
             self.diagram = np.full((self.im_height, self.im_width, 3), 255, np.uint8)
             self.line_diagram = None
+            self.num_superpixels_field.setText("Superpixels: _____")
 
         image = self.draw_diagram()
 
@@ -512,7 +529,7 @@ class MainWindow(QMainWindow):
 
         # cv2.imwrite("images/edges.png", c_edges)
 
-        min_weight = 2
+        min_weight = 3
         weight_reduction_factor = 150
 
         pixels = []
@@ -542,7 +559,10 @@ class MainWindow(QMainWindow):
         self.num_points_field.setEnabled(t_f)
         # the next two may be disabled by check_input
         self.generate_random_points_button.setEnabled(t_f)
-        self.generate_smart_points_button.setEnabled(t_f)
+        if t_f and self.image is not None:
+            self.generate_smart_points_button.setEnabled(t_f)
+        elif not t_f:
+            self.generate_smart_points_button.setEnabled(False)
 
         self.region_size_field.setEnabled(t_f)
         self.iterations_field.setEnabled(t_f)
