@@ -13,13 +13,11 @@ DEFAULT_WIDTH = 600
 DEFAULT_HEIGHT = 500
 DEFAULT_NUM_POINTS = 500
 DEFAULT_REGION_SIZE = 16
-DEFAULT_ITERATIONS = 10
+DEFAULT_ITERATIONS = 20
 
 
 # TODO: sample points on both sides of borders
-# TODO: look at evenly spaced points
-# TODO: draw lines on superpixels and toggle on/off
-# TODO: use the progress bar with superpixels?
+# TODO: look at evenly spaced points for voronoi
 
 
 class MainWindow(QMainWindow):
@@ -73,7 +71,6 @@ class MainWindow(QMainWindow):
         h.addWidget(self.save_image_button)
 
         # add the voronoi and superpixel radio buttons
-        # h.addWidget(QLabel('Mode: '))
         self.v_radio_button = QRadioButton("Voronoi Mode")
         self.v_radio_button.setChecked(True)
         self.v_radio_button.toggled.connect(self.voronoi_mode_clicked)
@@ -85,7 +82,6 @@ class MainWindow(QMainWindow):
 
         # ################ VORONOI SECTION
         self.voronoi_frame = QFrame()
-        self.voronoi_layout = QVBoxLayout()
         h = QHBoxLayout()
         # add the 'number of points' text and box
         h.addWidget(QLabel('Number of Points: '))
@@ -102,7 +98,28 @@ class MainWindow(QMainWindow):
         self.generate_smart_points_button.clicked.connect(self.generate_smart_clicked)
         self.generate_smart_points_button.setEnabled(False)
         h.addWidget(self.generate_smart_points_button)
-        self.voronoi_layout.addLayout(h)
+
+        self.voronoi_frame.setLayout(h)
+        self.main_layout.addWidget(self.voronoi_frame)
+        self.mode = "voronoi"
+
+        # ################ SUPERPIXEL SECTION
+        self.superpixel_frame = QFrame()
+        h = QHBoxLayout()
+        # add the 'region size' text and box
+        h.addWidget(QLabel('Region Size: '))
+        self.region_size_field = QLineEdit(str(DEFAULT_REGION_SIZE))
+        self.region_size_field.textChanged.connect(self.check_superpixel_input)
+        h.addWidget(self.region_size_field)
+        # add the 'number of iterations' text and box
+        h.addWidget(QLabel('Iterations: '))
+        self.iterations_field = QLineEdit(str(DEFAULT_ITERATIONS))
+        self.iterations_field.textChanged.connect(self.check_superpixel_input)
+        h.addWidget(self.iterations_field)
+
+        self.superpixel_frame.setLayout(h)
+        self.main_layout.addWidget(self.superpixel_frame)
+        self.superpixel_frame.hide()
 
         h = QHBoxLayout()
         h.addWidget(QLabel('Show:'))
@@ -122,39 +139,11 @@ class MainWindow(QMainWindow):
         self.toggle_colors_box.stateChanged.connect(self.toggle_colors_clicked)
         h.addWidget(self.toggle_colors_box)
         # add the 'generate voronoi' button
-        self.generate_voronoi_button = QPushButton("Generate Voronoi Diagram")
-        self.generate_voronoi_button.clicked.connect(self.generate_voronoi_clicked)
-        h.addWidget(self.generate_voronoi_button)
-        self.voronoi_layout.addLayout(h)
+        self.generate_diagram_button = QPushButton("Generate Voronoi Diagram")
+        self.generate_diagram_button.clicked.connect(self.generate_diagram_clicked)
+        h.addWidget(self.generate_diagram_button)
+        self.main_layout.addLayout(h)
         # layout.addLayout(v)
-
-        self.voronoi_frame.setLayout(self.voronoi_layout)
-        self.main_layout.addWidget(self.voronoi_frame)
-        self.mode = "voronoi"
-
-        # TODO: use this superpixel layout stuff
-        # ################ SUPERPIXEL SECTION
-        self.superpixel_frame = QFrame()
-        self.superpixel_layout = QVBoxLayout()
-        h = QHBoxLayout()
-        # add the 'number of regions' text and box
-        h.addWidget(QLabel('Region Size: '))
-        self.region_size_field = QLineEdit(str(DEFAULT_REGION_SIZE))
-        self.region_size_field.textChanged.connect(self.check_region_input)
-        h.addWidget(self.region_size_field)
-        h.addWidget(QLabel('Iterations: '))
-        self.iterations_field = QLineEdit(str(DEFAULT_ITERATIONS))
-        self.iterations_field.textChanged.connect(self.check_iterations_input)
-        h.addWidget(self.iterations_field)
-        # add the 'generate superpixels' button
-        self.generate_superpixels_button = QPushButton("Generate Superpixels")
-        self.generate_superpixels_button.clicked.connect(self.generate_superpixels_clicked)
-        h.addWidget(self.generate_superpixels_button)
-        self.superpixel_layout.addLayout(h)
-
-        self.superpixel_frame.setLayout(self.superpixel_layout)
-        self.main_layout.addWidget(self.superpixel_frame)
-        self.superpixel_frame.hide()
 
         # add the progress bar
         h = QHBoxLayout()
@@ -247,6 +236,9 @@ class MainWindow(QMainWindow):
             self.mode = "voronoi"
             self.superpixel_frame.hide()
             self.voronoi_frame.show()
+            self.generate_diagram_button.setText("Generate Voronoi Diagram")
+            self.generate_diagram_button.setEnabled(True)
+            self.toggle_points_box.setEnabled(True)
             self.set_diagram(reset=True)
 
     def superpixel_mode_clicked(self, checked: bool) -> None:
@@ -254,6 +246,9 @@ class MainWindow(QMainWindow):
             self.mode = "superpixel"
             self.voronoi_frame.hide()
             self.superpixel_frame.show()
+            self.generate_diagram_button.setText("Generate Superpixels")
+            self.check_superpixel_input()
+            self.toggle_points_box.setEnabled(False)
             self.set_diagram(reset=True)
 
     def generate_random_clicked(self) -> None:
@@ -289,9 +284,13 @@ class MainWindow(QMainWindow):
             self.show_colors = False
         self.set_diagram()
 
-    # mathematical approach to generating a colored voronoi diagram with the given points
-    # https://gist.github.com/bert/1188638/78a80d1824ffb2b64c736550d62b3e770e5a45b5
-    def generate_voronoi_clicked(self) -> None:
+    def generate_diagram_clicked(self) -> None:
+        if self.mode == "voronoi":
+            self.generate_voronoi()
+        else:
+            self.generate_superpixels()
+
+    def generate_voronoi(self) -> None:
         self.enable_all(False)
 
         time_1 = time()
@@ -302,6 +301,9 @@ class MainWindow(QMainWindow):
         depth_map = None
         # the color map has a different integer for each area
         color_map = np.zeros((self.im_height, self.im_width), np.int32)
+
+        # mathematical approach to generating a colored voronoi diagram with the given points
+        # https://gist.github.com/bert/1188638/78a80d1824ffb2b64c736550d62b3e770e5a45b5
 
         def hypotenuse(Y, X):
             return (X - x) ** 2 + (Y - y) ** 2
@@ -348,7 +350,14 @@ class MainWindow(QMainWindow):
         self.enable_all(True)
         self.set_diagram()
 
-    def generate_superpixels_clicked(self) -> None:
+    def generate_superpixels(self) -> None:
+        self.enable_all(False)
+
+        time_1 = time()
+
+        self.progress_bar.resetFormat()
+        self.progress_bar.setValue(0)
+
         if self.image is None:
             im = np.full((self.im_height, self.im_width, 3), 255, np.uint8)
         else:
@@ -380,8 +389,23 @@ class MainWindow(QMainWindow):
                 mean = cv2.mean(self.image, mask)
                 mean = [int(x) for x in mean[:3]]
                 image_colors[i] = mean
-
+                self.progress_bar.setValue(50 + int((i + 1) * 50 / num_regions))
         self.diagram = image_colors[labels]
+
+        # find the lines (borders between colors)
+        # vertical borders
+        v_lines = np.where(labels[:-1] != labels[1:], True, False)
+        v_lines = np.vstack([[False] * self.im_width, v_lines])
+        # horizontal borders
+        h_lines = np.where(labels[:, :-1] != labels[:, 1:], True, False)
+        h_lines = np.hstack([[[False]] * self.im_height, h_lines])
+        # combine and save it
+        self.line_diagram = h_lines | v_lines
+
+        self.progress_bar.setValue(100)
+        self.progress_bar.setFormat(str(round(time() - time_1, 1)) + " s")
+
+        self.enable_all(True)
         self.set_diagram()
 
     # check input of the 'num points' field
@@ -394,17 +418,12 @@ class MainWindow(QMainWindow):
             self.generate_random_points_button.setEnabled(False)
             self.generate_smart_points_button.setEnabled(False)
 
-    def check_region_input(self) -> None:
-        if self.region_size_field.text().isdigit() and int(self.region_size_field.text()) >= 1:
-            self.generate_superpixels_button.setEnabled(True)
+    def check_superpixel_input(self) -> None:
+        if self.region_size_field.text().isdigit() and int(self.region_size_field.text()) >= 1 \
+                and self.iterations_field.text().isdigit() and int(self.iterations_field.text()) >= 1:
+            self.generate_diagram_button.setEnabled(True)
         else:
-            self.generate_superpixels_button.setEnabled(False)
-
-    def check_iterations_input(self) -> None:
-        if self.iterations_field.text().isdigit() and int(self.iterations_field.text()) >= 1:
-            self.generate_superpixels_button.setEnabled(True)
-        else:
-            self.generate_superpixels_button.setEnabled(False)
+            self.generate_diagram_button.setEnabled(False)
 
     # sets the voronoi_diagram in the frame
     def set_diagram(self, reset: bool = False) -> None:
@@ -525,10 +544,14 @@ class MainWindow(QMainWindow):
         self.generate_random_points_button.setEnabled(t_f)
         self.generate_smart_points_button.setEnabled(t_f)
 
-        self.toggle_points_box.setEnabled(t_f)
+        self.region_size_field.setEnabled(t_f)
+        self.iterations_field.setEnabled(t_f)
+
+        if self.mode == "voronoi":
+            self.toggle_points_box.setEnabled(t_f)
         self.toggle_lines_box.setEnabled(t_f)
         self.toggle_colors_box.setEnabled(t_f)
-        self.generate_voronoi_button.setEnabled(t_f)
+        self.generate_diagram_button.setEnabled(t_f)
 
         if t_f:
             self.check_points_input()
