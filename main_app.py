@@ -54,18 +54,22 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(main_widget)
 
         # add the image frame
+        self.frames = QVBoxLayout()
         self.image_frame = QLabel("Your Image Will Show Here")
         self.image_frame.setMinimumHeight(DEFAULT_HEIGHT)
         self.image_frame.setMinimumWidth(DEFAULT_WIDTH)
         self.image_frame.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.main_layout.addWidget(self.image_frame)
+        self.frames.addWidget(self.image_frame)
+        # self.main_layout.addWidget(self.image_frame)
 
         # add the diagram frame
         self.diagram_frame = QLabel()
         self.diagram_frame.setMinimumHeight(DEFAULT_HEIGHT)
         self.diagram_frame.setMinimumWidth(DEFAULT_WIDTH)
         self.diagram_frame.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.main_layout.addWidget(self.diagram_frame)
+        self.frames.addWidget(self.diagram_frame)
+        # self.main_layout.addWidget(self.diagram_frame)
+        self.main_layout.addLayout(self.frames)
 
         h = QHBoxLayout()
         # add the 'upload image' button
@@ -78,13 +82,16 @@ class MainWindow(QMainWindow):
         h.addWidget(self.save_image_button)
 
         # add the voronoi and superpixel radio buttons
-        self.v_radio_button = QRadioButton("Voronoi Mode")
-        self.v_radio_button.setChecked(True)
-        self.v_radio_button.toggled.connect(self.voronoi_mode_clicked)
-        h.addWidget(self.v_radio_button)
-        self.s_radio_button = QRadioButton("Superpixel Mode")
-        self.s_radio_button.toggled.connect(self.superpixel_mode_clicked)
-        h.addWidget(self.s_radio_button)
+        mode_group = QButtonGroup(main_widget)
+        self.voronoi_radio_button = QRadioButton("Voronoi Mode")
+        self.voronoi_radio_button.setChecked(True)
+        self.voronoi_radio_button.toggled.connect(self.voronoi_mode_clicked)
+        mode_group.addButton(self.voronoi_radio_button)
+        h.addWidget(self.voronoi_radio_button)
+        self.superpixel_radio_button = QRadioButton("Superpixel Mode")
+        self.superpixel_radio_button.toggled.connect(self.superpixel_mode_clicked)
+        mode_group.addButton(self.superpixel_radio_button)
+        h.addWidget(self.superpixel_radio_button)
         self.main_layout.addLayout(h)
 
         # ################ VORONOI SECTION
@@ -93,7 +100,7 @@ class MainWindow(QMainWindow):
         # add the 'number of points' text and box
         h.addWidget(QLabel('Number of Points: '))
         self.num_points_field = QLineEdit(str(DEFAULT_NUM_POINTS))
-        self.num_points_field.setFixedWidth(75)
+        # self.num_points_field.setFixedWidth(75)
         self.num_points_field.textChanged.connect(self.check_points_input)
         h.addWidget(self.num_points_field)
         # add the 'generate random points' button
@@ -116,11 +123,13 @@ class MainWindow(QMainWindow):
         # add the 'region size' text and box
         h.addWidget(QLabel('Region Size: '))
         self.region_size_field = QLineEdit(str(DEFAULT_REGION_SIZE))
+        # self.region_size_field.setFixedWidth(75)
         self.region_size_field.textChanged.connect(self.check_superpixel_input)
         h.addWidget(self.region_size_field)
         # add the 'number of iterations' text and box
         h.addWidget(QLabel('Iterations: '))
         self.iterations_field = QLineEdit(str(DEFAULT_ITERATIONS))
+        # self.iterations_field.setFixedWidth(75)
         self.iterations_field.textChanged.connect(self.check_superpixel_input)
         h.addWidget(self.iterations_field)
         # add the 'number of superpixels' text box
@@ -161,8 +170,19 @@ class MainWindow(QMainWindow):
         h = QHBoxLayout()
         h.addWidget(QLabel('Progress: '))
         self.progress_bar = QProgressBar()
-        # self.progress_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
         h.addWidget(self.progress_bar)
+
+        # add the orientation radio buttons
+        orientation_group = QButtonGroup(main_widget)
+        self.vertical_radio_button = QRadioButton("Vertical Window")
+        self.vertical_radio_button.setChecked(True)
+        self.vertical_radio_button.toggled.connect(self.vertical_orientation_clicked)
+        orientation_group.addButton(self.vertical_radio_button)
+        h.addWidget(self.vertical_radio_button)
+        self.horizontal_radio_button = QRadioButton("Horizontal Window")
+        self.horizontal_radio_button.toggled.connect(self.horizontal_orientation_clicked)
+        orientation_group.addButton(self.horizontal_radio_button)
+        h.addWidget(self.horizontal_radio_button)
         self.main_layout.addLayout(h)
 
         self.generate_random_points(DEFAULT_NUM_POINTS)
@@ -424,6 +444,17 @@ class MainWindow(QMainWindow):
         self.enable_all(True)
         self.set_diagram()
 
+    def vertical_orientation_clicked(self, checked: bool) -> None:
+        if checked:
+            print('v o clicked')
+
+    def horizontal_orientation_clicked(self, checked: bool) -> None:
+        if checked:
+            print('h o clicked')
+            # self.frames = QHBoxLayout()
+            # self.frames.addWidget(self.image_frame)
+            # self.frames.addWidget(self.diagram_frame)
+
     # check input of the 'num points' field
     def check_points_input(self) -> None:
         if self.num_points_field.text().isdigit() and int(self.num_points_field.text()) >= 1:
@@ -553,8 +584,8 @@ class MainWindow(QMainWindow):
     def enable_all(self, t_f: bool) -> None:
         self.upload_image_button.setEnabled(t_f)
         self.save_image_button.setEnabled(t_f)
-        self.v_radio_button.setEnabled(t_f)
-        self.s_radio_button.setEnabled(t_f)
+        self.voronoi_radio_button.setEnabled(t_f)
+        self.superpixel_radio_button.setEnabled(t_f)
 
         self.num_points_field.setEnabled(t_f)
         # the next two may be disabled by check_input
