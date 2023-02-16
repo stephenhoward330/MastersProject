@@ -14,13 +14,11 @@ DEFAULT_HEIGHT = 500
 DEFAULT_NUM_POINTS = 1000
 DEFAULT_REGION_SIZE = 16
 DEFAULT_ITERATIONS = 20
+DEFAULT_ORIENTATION = 'horizontal'
 
 
 # TODO: sample points on both sides of borders
 # TODO: look at evenly spaced points for voronoi
-# TODO: use progress bar for smart points
-
-# TODO: allow for side-by-side frames
 
 # TODO: look at exporting files that a laser cutter would use
 # https://lib.byu.edu/services/laser-cutters/
@@ -44,53 +42,148 @@ class MainWindow(QMainWindow):
 
         self.progress = 0
         self.points = []
+        self.mode = "voronoi"
 
         self.setWindowTitle("Voronoi Art Maker")
         self.main_layout = QVBoxLayout()
-        main_widget = QWidget()
+        self.main_widget = QWidget()
 
-        # Set the central widget of the Window
-        main_widget.setLayout(self.main_layout)
-        self.setCentralWidget(main_widget)
-
-        # add the image frame
         self.frames = QVBoxLayout()
+
+        # the frame for the user-entered image
         self.image_frame = QLabel("Your Image Will Show Here")
         self.image_frame.setMinimumHeight(DEFAULT_HEIGHT)
         self.image_frame.setMinimumWidth(DEFAULT_WIDTH)
         self.image_frame.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.frames.addWidget(self.image_frame)
-        # self.main_layout.addWidget(self.image_frame)
 
-        # add the diagram frame
+        # the frame for the resulting diagram
         self.diagram_frame = QLabel()
         self.diagram_frame.setMinimumHeight(DEFAULT_HEIGHT)
         self.diagram_frame.setMinimumWidth(DEFAULT_WIDTH)
-        self.diagram_frame.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.frames.addWidget(self.diagram_frame)
-        # self.main_layout.addWidget(self.diagram_frame)
-        self.main_layout.addLayout(self.frames)
 
-        h = QHBoxLayout()
-        # add the 'upload image' button
+        # the 'upload image' button
         self.upload_image_button = QPushButton("Upload Image")
         self.upload_image_button.clicked.connect(self.upload_image_clicked)
-        h.addWidget(self.upload_image_button)
-        # add the 'save image' button
+        # the 'save image' button
         self.save_image_button = QPushButton("Save Image")
         self.save_image_button.clicked.connect(self.save_image_clicked)
-        h.addWidget(self.save_image_button)
 
         # add the voronoi and superpixel radio buttons
-        mode_group = QButtonGroup(main_widget)
+        mode_group = QButtonGroup(self.main_widget)
         self.voronoi_radio_button = QRadioButton("Voronoi Mode")
         self.voronoi_radio_button.setChecked(True)
         self.voronoi_radio_button.toggled.connect(self.voronoi_mode_clicked)
         mode_group.addButton(self.voronoi_radio_button)
-        h.addWidget(self.voronoi_radio_button)
         self.superpixel_radio_button = QRadioButton("Superpixel Mode")
         self.superpixel_radio_button.toggled.connect(self.superpixel_mode_clicked)
         mode_group.addButton(self.superpixel_radio_button)
+
+        # ################ VORONOI SECTION
+        self.voronoi_frame = QFrame()
+        # the 'number of points' text and box
+        self.num_points_label = QLabel('Number of Points: ')
+        self.num_points_field = QLineEdit(str(DEFAULT_NUM_POINTS))
+        self.num_points_field.setFixedWidth(75)
+        self.num_points_field.textChanged.connect(self.check_points_input)
+        # the 'generate random points' button
+        self.generate_random_points_button = QPushButton("Generate Random Points")
+        self.generate_random_points_button.clicked.connect(self.generate_random_clicked)
+        # the 'generate smart points' button
+        self.generate_smart_points_button = QPushButton("Generate Smart Points")
+        self.generate_smart_points_button.clicked.connect(self.generate_smart_clicked)
+        self.generate_smart_points_button.setEnabled(False)
+
+        # ################ SUPERPIXEL SECTION
+        self.superpixel_frame = QFrame()
+        # the 'region size' text and box
+        self.region_size_label = QLabel('Region Size: ')
+        self.region_size_field = QLineEdit(str(DEFAULT_REGION_SIZE))
+        self.region_size_field.setFixedWidth(75)
+        self.region_size_field.textChanged.connect(self.check_superpixel_input)
+        # the 'number of iterations' text and box
+        self.iterations_label = QLabel('Iterations: ')
+        self.iterations_field = QLineEdit(str(DEFAULT_ITERATIONS))
+        self.iterations_field.setFixedWidth(75)
+        self.iterations_field.textChanged.connect(self.check_superpixel_input)
+        # the 'number of superpixels' text box
+        self.num_superpixels_field = QLabel('Superpixels: _____')
+        self.num_superpixels_field.setFixedWidth(150)
+
+        self.show_label = QLabel('Show:')
+        # the toggle points checkbox
+        self.toggle_points_box = QCheckBox('Points?')
+        self.toggle_points_box.setChecked(True)
+        self.toggle_points_box.stateChanged.connect(self.toggle_points_clicked)
+        # the toggle lines checkbox
+        self.toggle_lines_box = QCheckBox('Lines?')
+        self.toggle_lines_box.setChecked(True)
+        self.toggle_lines_box.stateChanged.connect(self.toggle_lines_clicked)
+        # the toggle colors checkbox
+        self.toggle_colors_box = QCheckBox('Colors?')
+        self.toggle_colors_box.setChecked(True)
+        self.toggle_colors_box.stateChanged.connect(self.toggle_colors_clicked)
+        # the 'generate voronoi' button
+        self.generate_diagram_button = QPushButton("Generate Voronoi Diagram")
+        self.generate_diagram_button.clicked.connect(self.generate_diagram_clicked)
+        self.generate_diagram_button.setFixedWidth(200)
+
+        # the progress bar
+        self.progress_label = QLabel('Progress: ')
+        self.progress_bar = QProgressBar()
+
+        # the orientation radio buttons
+        orientation_group = QButtonGroup(self.main_widget)
+        self.vertical_radio_button = QRadioButton("Vertical Window")
+        self.vertical_radio_button.toggled.connect(self.vertical_orientation_clicked)
+        orientation_group.addButton(self.vertical_radio_button)
+        self.horizontal_radio_button = QRadioButton("Horizontal Window")
+        self.horizontal_radio_button.toggled.connect(self.horizontal_orientation_clicked)
+        orientation_group.addButton(self.horizontal_radio_button)
+
+        if DEFAULT_ORIENTATION == 'vertical':
+            self.vertical_radio_button.setChecked(True)
+        else:
+            self.horizontal_radio_button.setChecked(True)
+
+        # initialize the points and diagram
+        self.generate_random_points(DEFAULT_NUM_POINTS)
+        self.set_diagram()
+
+        # order the layout
+        self.init_layout(DEFAULT_ORIENTATION)
+
+        # show the window
+        self.show()
+
+    def init_layout(self, orientation: str) -> None:
+        # clear the main layout
+        while self.main_layout.count():
+            child = self.main_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        # Set the central widget of the Window
+        self.main_widget.setLayout(self.main_layout)
+        self.setCentralWidget(self.main_widget)
+
+        if orientation == 'horizontal':
+            self.frames = QHBoxLayout()
+        else:
+            self.frames = QVBoxLayout()
+
+        # add the image frame
+        self.frames.addWidget(self.image_frame)
+        # add the diagram frame
+        self.frames.addWidget(self.diagram_frame)
+        self.main_layout.addLayout(self.frames)
+
+        h = QHBoxLayout()
+        # add the 'upload image' button
+        h.addWidget(self.upload_image_button)
+        # add the 'save image' button
+        h.addWidget(self.save_image_button)
+        # add the voronoi and superpixel radio buttons
+        h.addWidget(self.voronoi_radio_button)
         h.addWidget(self.superpixel_radio_button)
         self.main_layout.addLayout(h)
 
@@ -98,98 +191,60 @@ class MainWindow(QMainWindow):
         self.voronoi_frame = QFrame()
         h = QHBoxLayout()
         # add the 'number of points' text and box
-        h.addWidget(QLabel('Number of Points: '))
-        self.num_points_field = QLineEdit(str(DEFAULT_NUM_POINTS))
-        # self.num_points_field.setFixedWidth(75)
-        self.num_points_field.textChanged.connect(self.check_points_input)
+        h.addWidget(self.num_points_label)
         h.addWidget(self.num_points_field)
         # add the 'generate random points' button
-        self.generate_random_points_button = QPushButton("Generate Random Points")
-        self.generate_random_points_button.clicked.connect(self.generate_random_clicked)
         h.addWidget(self.generate_random_points_button)
         # add the 'generate smart points' button
-        self.generate_smart_points_button = QPushButton("Generate Smart Points")
-        self.generate_smart_points_button.clicked.connect(self.generate_smart_clicked)
-        self.generate_smart_points_button.setEnabled(False)
         h.addWidget(self.generate_smart_points_button)
 
         self.voronoi_frame.setLayout(h)
         self.main_layout.addWidget(self.voronoi_frame)
-        self.mode = "voronoi"
 
         # ################ SUPERPIXEL SECTION
         self.superpixel_frame = QFrame()
         h = QHBoxLayout()
         # add the 'region size' text and box
-        h.addWidget(QLabel('Region Size: '))
-        self.region_size_field = QLineEdit(str(DEFAULT_REGION_SIZE))
-        # self.region_size_field.setFixedWidth(75)
-        self.region_size_field.textChanged.connect(self.check_superpixel_input)
+        h.addWidget(self.region_size_label)
         h.addWidget(self.region_size_field)
         # add the 'number of iterations' text and box
-        h.addWidget(QLabel('Iterations: '))
-        self.iterations_field = QLineEdit(str(DEFAULT_ITERATIONS))
-        # self.iterations_field.setFixedWidth(75)
-        self.iterations_field.textChanged.connect(self.check_superpixel_input)
+        h.addWidget(self.iterations_label)
         h.addWidget(self.iterations_field)
         # add the 'number of superpixels' text box
-        self.num_superpixels_field = QLabel('Superpixels: _____')
-        self.num_superpixels_field.setFixedWidth(150)
         h.addWidget(self.num_superpixels_field)
 
         self.superpixel_frame.setLayout(h)
         self.main_layout.addWidget(self.superpixel_frame)
-        self.superpixel_frame.hide()
+
+        # show the correct fields for the current mode
+        if self.mode == 'voronoi':
+            self.superpixel_frame.hide()
+            self.voronoi_frame.show()
+        else:
+            self.voronoi_frame.hide()
+            self.superpixel_frame.show()
 
         h = QHBoxLayout()
-        h.addWidget(QLabel('Show:'))
-        # add the toggle points checkbox
-        self.toggle_points_box = QCheckBox('Points?')
-        self.toggle_points_box.setChecked(True)
-        self.toggle_points_box.stateChanged.connect(self.toggle_points_clicked)
+        # add the toggle points, lines, and colors checkboxes
+        h.addWidget(self.show_label)
         h.addWidget(self.toggle_points_box)
-        # add the toggle lines checkbox
-        self.toggle_lines_box = QCheckBox('Lines?')
-        self.toggle_lines_box.setChecked(True)
-        self.toggle_lines_box.stateChanged.connect(self.toggle_lines_clicked)
         h.addWidget(self.toggle_lines_box)
-        # add the toggle colors checkbox
-        self.toggle_colors_box = QCheckBox('Colors?')
-        self.toggle_colors_box.setChecked(True)
-        self.toggle_colors_box.stateChanged.connect(self.toggle_colors_clicked)
         h.addWidget(self.toggle_colors_box)
         # add the 'generate voronoi' button
-        self.generate_diagram_button = QPushButton("Generate Voronoi Diagram")
-        self.generate_diagram_button.clicked.connect(self.generate_diagram_clicked)
-        self.generate_diagram_button.setFixedWidth(200)
         h.addWidget(self.generate_diagram_button)
         self.main_layout.addLayout(h)
-        # layout.addLayout(v)
 
         # add the progress bar
         h = QHBoxLayout()
-        h.addWidget(QLabel('Progress: '))
-        self.progress_bar = QProgressBar()
+        h.addWidget(self.progress_label)
         h.addWidget(self.progress_bar)
-
         # add the orientation radio buttons
-        orientation_group = QButtonGroup(main_widget)
-        self.vertical_radio_button = QRadioButton("Vertical Window")
-        self.vertical_radio_button.setChecked(True)
-        self.vertical_radio_button.toggled.connect(self.vertical_orientation_clicked)
-        orientation_group.addButton(self.vertical_radio_button)
         h.addWidget(self.vertical_radio_button)
-        self.horizontal_radio_button = QRadioButton("Horizontal Window")
-        self.horizontal_radio_button.toggled.connect(self.horizontal_orientation_clicked)
-        orientation_group.addButton(self.horizontal_radio_button)
         h.addWidget(self.horizontal_radio_button)
         self.main_layout.addLayout(h)
 
-        self.generate_random_points(DEFAULT_NUM_POINTS)
-        self.set_diagram()
-
-        # show the window
-        self.show()
+        # resize the window
+        self.setFixedSize(self.main_layout.sizeHint())
 
     def upload_image_clicked(self) -> None:
         if self.image is None:
@@ -446,14 +501,11 @@ class MainWindow(QMainWindow):
 
     def vertical_orientation_clicked(self, checked: bool) -> None:
         if checked:
-            print('v o clicked')
+            self.init_layout('vertical')
 
     def horizontal_orientation_clicked(self, checked: bool) -> None:
         if checked:
-            print('h o clicked')
-            # self.frames = QHBoxLayout()
-            # self.frames.addWidget(self.image_frame)
-            # self.frames.addWidget(self.diagram_frame)
+            self.init_layout('horizontal')
 
     # check input of the 'num points' field
     def check_points_input(self) -> None:
@@ -520,6 +572,13 @@ class MainWindow(QMainWindow):
 
     # generate new, random points
     def generate_random_points(self, num_points: int) -> None:
+        self.enable_all(False)
+
+        time_1 = time()
+
+        self.progress_bar.resetFormat()
+        self.progress_bar.setValue(0)
+
         self.points = []
         while len(self.points) < num_points:
             x = random.randint(0, self.im_width - 1)
@@ -527,21 +586,26 @@ class MainWindow(QMainWindow):
             if (x, y) in self.points:
                 continue
             self.points.append((x, y))
+            self.progress_bar.setValue(int(len(self.points) * 100 / num_points))
         self.points = sorted(self.points)  # not necessary but may be nice
+
+        self.progress_bar.setValue(100)
+        self.progress_bar.setFormat(str(round(time() - time_1, 1)) + " s")
+
+        self.enable_all(True)
 
     # generate new, smart points
     def generate_smart_points(self, num_points: int) -> None:
+        self.enable_all(False)
+
+        time_1 = time()
+
+        self.progress_bar.resetFormat()
+        self.progress_bar.setValue(0)
+
         self.points = []
 
-        # sample dark areas more
-        # pixels = []
-        # weights = []
-        # for i in range(len(self.image)):
-        #     for j in range(len(self.image[i])):
-        #         pixels.append((j, i))
-        #         # sample dark pixels more (a white pixel sums to 765)
-        #         weights.append(768 - self.image[i][j][0] - self.image[i][j][1] - self.image[i][j][2])
-        # self.points = random.choices(pixels, weights, k=num_points)
+        # ############# EDGE DETECTION
 
         # define the vertical filter
         vertical_filter = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]])
@@ -565,21 +629,22 @@ class MainWindow(QMainWindow):
 
         pixels = []
         weights = []
-        # max_c = 0
         for i in range(len(c_edges)):
             for j in range(len(c_edges[i])):
                 pixels.append((j, i))
                 c_sum = c_edges[i][j][0].astype(np.int32) + c_edges[i][j][1].astype(np.int32) \
                     + c_edges[i][j][2].astype(np.int32) - weight_reduction_factor
-                # if c_sum > max_c:
-                #     max_c = c_sum
-                # c_sum = 0 if c_sum < 0 else c_sum
                 weights.append(min_weight if c_sum < min_weight else c_sum + min_weight)
+            self.progress_bar.setValue(int((i + 1) * 100 / len(c_edges)))
+        # TODO: change the below to sample without replacement
         self.points = random.choices(pixels, weights, k=num_points)
-        # print(max_c)
-        # print(type(c_sum))
 
         self.points = sorted(self.points)  # not necessary but may be nice
+
+        self.progress_bar.setValue(100)
+        self.progress_bar.setFormat(str(round(time() - time_1, 1)) + " s")
+
+        self.enable_all(True)
 
     def enable_all(self, t_f: bool) -> None:
         self.upload_image_button.setEnabled(t_f)
