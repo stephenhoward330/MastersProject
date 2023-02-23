@@ -22,6 +22,11 @@ DEFAULT_ORIENTATION = 'horizontal'
 
 # TODO: look at exporting files that a laser cutter would use
 # https://lib.byu.edu/services/laser-cutters/
+# TODO: look at pdf file format
+# TODO: print out a file for each color, with pieces flipped and labeled
+# delviesplastics.com
+
+# TODO: look into the PyX package
 
 # TODO: extend to 3D
 
