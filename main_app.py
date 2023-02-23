@@ -268,6 +268,8 @@ class MainWindow(QMainWindow):
             image_file = image_files[0]
             try:
                 image = cv2.imread(image_file, cv2.IMREAD_COLOR)
+                if image is None:
+                    raise Exception("invalid filepath")
                 # print(image.shape)
                 self.image = cv2.resize(image, (self.im_width, self.im_height))
                 # self.im_height = self.image.shape[0]
@@ -302,23 +304,43 @@ class MainWindow(QMainWindow):
         if filename == "":
             print("None entered")
             return
-        if not (filename[-4:] == '.png' or filename[-4:] == '.jpg' or filename[-5:] == '.jpeg'):
-            print("BAD FILE EXTENSION")
-            return
+        if filename[-4:] == '.png' or filename[-4:] == '.jpg' or filename[-5:] == '.jpeg':
+            # prepare output to save as image
+            output = self.draw_diagram()
+            output = output.astype(np.uint8)
 
-        # prepare output to save
-        output = self.draw_diagram()
-        output = output.astype(np.uint8)
+            # save it out
+            try:
+                if cv2.imwrite(filename, output):
+                    print("file save succeeded")
+                else:
+                    print("file save failed")
+            except Exception as e:
+                print("Exception during file save:", e)
+                quit()
+        elif filename[-4:] == '.svg':
+            # convert image to .svg format (for a laser cutter)
+            # https://stackoverflow.com/questions/43108751/convert-contour-paths-to-svg-paths
+            if self.line_diagram is not None:
+                # im_gray = cv2.cvtColor(self.line_diagram, cv2.COLOR_BGR2GRAY)
+                # _, thresh = cv2.threshold(im_gray, 127, 255, 0)
+                thresh = np.where(self.line_diagram, 255, 0)
+                thresh = thresh.astype('uint8')
+                contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
-        # save it out
-        try:
-            if cv2.imwrite(filename, output):
-                print("file save succeeded")
+                with open(filename, "w+") as f:
+                    f.write(f'<svg width="{self.im_width}" height="{self.im_height}" xmlns="http://www.w3.org/2000/svg">')
+                    for c in contours:
+                        f.write('<path d="M')
+                        for i in range(len(c)):
+                            x, y = c[i][0]
+                            f.write(f"{x} {y} ")
+                        f.write('" fill="none" stroke="white"/>')
+                    f.write("</svg>")
             else:
-                print("file save failed")
-        except Exception as e:
-            print("Exception during file save:", e)
-            quit()
+                print("NO LINE DIAGRAM")
+        else:
+            print("BAD FILE EXTENSION")
 
     def voronoi_mode_clicked(self, checked: bool) -> None:
         if checked:
