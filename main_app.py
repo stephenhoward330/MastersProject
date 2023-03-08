@@ -24,6 +24,7 @@ DEFAULT_ORIENTATION = 'horizontal'
 # https://lib.byu.edu/services/laser-cutters/
 # TODO: look at pdf file format
 # TODO: print out a file for each color, with pieces flipped and labeled
+# TODO: write a number on each piece, centered and engraved (not cut)
 # delviesplastics.com
 
 # TODO: look into the PyX package
@@ -37,6 +38,8 @@ class MainWindow(QMainWindow):
         self.diagram = np.full((DEFAULT_HEIGHT, DEFAULT_WIDTH, 3), 255, np.uint8)
         self.line_diagram = None
         self.image = None
+        self.color_map = None
+        self.centers = None
 
         self.show_points = True
         self.show_lines = True
@@ -70,8 +73,8 @@ class MainWindow(QMainWindow):
         self.upload_image_button = QPushButton("Upload Image")
         self.upload_image_button.clicked.connect(self.upload_image_clicked)
         # the 'save image' button
-        self.save_image_button = QPushButton("Save Image")
-        self.save_image_button.clicked.connect(self.save_image_clicked)
+        self.save_result_button = QPushButton("Save Result")
+        self.save_result_button.clicked.connect(self.save_result_clicked)
 
         # add the voronoi and superpixel radio buttons
         mode_group = QButtonGroup(self.main_widget)
@@ -186,7 +189,7 @@ class MainWindow(QMainWindow):
         # add the 'upload image' button
         h.addWidget(self.upload_image_button)
         # add the 'save image' button
-        h.addWidget(self.save_image_button)
+        h.addWidget(self.save_result_button)
         # add the voronoi and superpixel radio buttons
         h.addWidget(self.voronoi_radio_button)
         h.addWidget(self.superpixel_radio_button)
@@ -302,7 +305,7 @@ class MainWindow(QMainWindow):
             self.upload_image_button.setText("Upload Image")
             self.generate_smart_points_button.setEnabled(False)
 
-    def save_image_clicked(self) -> None:
+    def save_result_clicked(self) -> None:
         filename, _ = QFileDialog.getSaveFileName(self, "Save As", "outputs/result.png", "*.png;;*.jpg;;*.jpeg")
         # "Image (*.png *.jpg *.jpeg)")
 
@@ -416,7 +419,7 @@ class MainWindow(QMainWindow):
 
         depth_map = None
         # the color map has a different integer for each area
-        color_map = np.zeros((self.im_height, self.im_width), np.int32)
+        self.color_map = np.zeros((self.im_height, self.im_width), np.int32)
 
         # mathematical approach to generating a colored voronoi diagram with the given points
         # https://gist.github.com/bert/1188638/78a80d1824ffb2b64c736550d62b3e770e5a45b5
@@ -430,7 +433,9 @@ class MainWindow(QMainWindow):
             if i == 0:
                 depth_map = paraboloid.copy()
             else:
-                color_map = np.where(paraboloid < depth_map, i, color_map)
+                # used to color the regions, first region all 0's, second region all 1's and so on
+                self.color_map = np.where(paraboloid < depth_map, i, self.color_map)
+                # used for determining which point is closest
                 depth_map = np.where(paraboloid < depth_map, paraboloid, depth_map)
 
             self.progress_bar.setValue(int((i + 1) * 90 / len(self.points)))
@@ -442,20 +447,20 @@ class MainWindow(QMainWindow):
                 image_colors[i] = random.choices(range(256), k=3)
             else:
                 # compute each cell's color as the average of all pixels in the cell
-                mask = np.where(color_map == i, 255, 0)
+                mask = np.where(self.color_map == i, 255, 0)
                 mask = mask.astype(np.uint8)
                 mean = cv2.mean(self.image, mask)
-                mean = [int(x) for x in mean[:3]]
+                mean = [int(x) for x in mean[:3]]  # removing the added 4th dimension and cast to int
                 image_colors[i] = mean
                 self.progress_bar.setValue(90 + int((i + 1) * 10 / len(self.points)))
-        self.diagram = image_colors[color_map]
+        self.diagram = image_colors[self.color_map]
 
         # find the lines (borders between colors)
         # vertical borders
-        v_lines = np.where(color_map[:-1] != color_map[1:], True, False)
+        v_lines = np.where(self.color_map[:-1] != self.color_map[1:], True, False)
         v_lines = np.vstack([[False] * self.im_width, v_lines])
         # horizontal borders
-        h_lines = np.where(color_map[:, :-1] != color_map[:, 1:], True, False)
+        h_lines = np.where(self.color_map[:, :-1] != self.color_map[:, 1:], True, False)
         h_lines = np.hstack([[[False]] * self.im_height, h_lines])
         # combine and save it
         self.line_diagram = h_lines | v_lines
@@ -491,7 +496,7 @@ class MainWindow(QMainWindow):
         #     cv_slic.iterate(1)
         cv_slic.iterate(int(self.iterations_field.text()))
 
-        labels = cv_slic.getLabels()
+        self.color_map = cv_slic.getLabels()
         num_regions = cv_slic.getNumberOfSuperpixels()
 
         image_colors = np.empty((num_regions, 3), dtype=np.uint8)
@@ -500,20 +505,20 @@ class MainWindow(QMainWindow):
             if self.image is None:
                 image_colors[i] = random.choices(range(256), k=3)
             else:
-                mask = np.where(labels == i, 255, 0)
+                mask = np.where(self.color_map == i, 255, 0)
                 mask = mask.astype(np.uint8)
                 mean = cv2.mean(self.image, mask)
                 mean = [int(x) for x in mean[:3]]
                 image_colors[i] = mean
                 self.progress_bar.setValue(50 + int((i + 1) * 50 / num_regions))
-        self.diagram = image_colors[labels]
+        self.diagram = image_colors[self.color_map]
 
         # find the lines (borders between colors)
         # vertical borders
-        v_lines = np.where(labels[:-1] != labels[1:], True, False)
+        v_lines = np.where(self.color_map[:-1] != self.color_map[1:], True, False)
         v_lines = np.vstack([[False] * self.im_width, v_lines])
         # horizontal borders
-        h_lines = np.where(labels[:, :-1] != labels[:, 1:], True, False)
+        h_lines = np.where(self.color_map[:, :-1] != self.color_map[:, 1:], True, False)
         h_lines = np.hstack([[[False]] * self.im_height, h_lines])
         # combine and save it
         self.line_diagram = h_lines | v_lines
@@ -523,8 +528,25 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(100)
         self.progress_bar.setFormat(str(round(time() - time_1, 1)) + " s")
 
+        self.find_centers()
+
         self.enable_all(True)
         self.set_diagram()
+
+    def find_centers(self) -> None:
+        # only useful after voronoi or superpixels has established a color map
+        if self.color_map is None:
+            return
+
+        self.centers = np.zeros((self.im_height, self.im_width), np.int32)
+
+        for i in range(self.color_map.max() + 1):
+            w = np.where(self.color_map == i)
+            # wa = np.argwhere(self.color_map == i)
+            center = (w[1].min() + ((w[1].max() - w[1].min()) // 2), w[0].min() + ((w[0].max() - w[0].min()) // 2))
+            self.diagram = cv2.putText(self.diagram, str(i + 1), center, cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 0), 1)
+
+        # TODO update self.centers instead of the diagram
 
     def vertical_orientation_clicked(self, checked: bool) -> None:
         if checked:
@@ -675,7 +697,7 @@ class MainWindow(QMainWindow):
 
     def enable_all(self, t_f: bool) -> None:
         self.upload_image_button.setEnabled(t_f)
-        self.save_image_button.setEnabled(t_f)
+        self.save_result_button.setEnabled(t_f)
         self.voronoi_radio_button.setEnabled(t_f)
         self.superpixel_radio_button.setEnabled(t_f)
 
