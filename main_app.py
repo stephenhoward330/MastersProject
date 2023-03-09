@@ -1,3 +1,4 @@
+import os
 import sys
 
 import cv2
@@ -11,25 +12,19 @@ from time import time
 
 DEFAULT_WIDTH = 600
 DEFAULT_HEIGHT = 500
-DEFAULT_NUM_POINTS = 1000
-DEFAULT_REGION_SIZE = 16
+DEFAULT_NUM_POINTS = 500
+DEFAULT_REGION_SIZE = 32
 DEFAULT_ITERATIONS = 20
 DEFAULT_ORIENTATION = 'horizontal'
 
 
-# TODO: sample points on both sides of borders
-# TODO: look at evenly spaced points for voronoi
-
-# TODO: look at exporting files that a laser cutter would use
 # https://lib.byu.edu/services/laser-cutters/
-# TODO: look at pdf file format
-# TODO: print out a file for each color, with pieces flipped and labeled
+# TODO: look at pdf file format (look into the PyX package)
+# TODO: save out a file for each color, with pieces flipped and labeled
 # TODO: write a number on each piece, centered and engraved (not cut)
 # delviesplastics.com
 
-# TODO: look into the PyX package
-
-# TODO: extend to 3D
+# TODO: allow for images of all sizes / resolutions
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -40,6 +35,7 @@ class MainWindow(QMainWindow):
         self.image = None
         self.color_map = None
         self.centers = None
+        self.color_palette = self.read_color_palette()
 
         self.show_points = True
         self.show_lines = True
@@ -254,6 +250,29 @@ class MainWindow(QMainWindow):
         # resize the window
         self.setFixedSize(self.main_layout.sizeHint())
 
+    @staticmethod
+    def read_color_palette() -> list[tuple]:
+        if not os.path.exists("palette.txt"):
+            return []
+
+        palette = []
+        with open("palette.txt", 'r') as f:
+            for line in f:
+                if line[0] == '#' or line[0] == '\n':
+                    continue
+
+                line = line.replace('(', '').replace(')', '')  # remove parens
+                color_tup = tuple(map(int, line.split(', ')))  # form tuple
+
+                if len(color_tup) != 3:
+                    raise Exception("Invalid palette.txt file: colors should have 3 channels (RGB), one color per line")
+                if min(color_tup) < 0 or max(color_tup) > 255:
+                    raise Exception("Invalid palette.txt file: RGB values should be between 0 and 255")
+
+                palette.append(color_tup[::-1])  # reverse the tuple into BGR form
+
+        return palette
+
     def upload_image_clicked(self) -> None:
         if self.image is None:
             # upload image
@@ -269,7 +288,7 @@ class MainWindow(QMainWindow):
             if dialog.exec():
                 image_files = dialog.selectedFiles()
             if image_files is None:
-                print("None entered")
+                # print("None entered")
                 return
             # if len(image_files) > 1:  # impossible with 'ExistingFile'
             #     print("Multiple files entered, using the first")
@@ -444,14 +463,27 @@ class MainWindow(QMainWindow):
 
         for i in range(len(self.points)):
             if self.image is None:
-                image_colors[i] = random.choices(range(256), k=3)
+                if len(self.color_palette) == 0:
+                    image_colors[i] = random.choices(range(256), k=3)
+                else:
+                    image_colors[i] = random.choice(self.color_palette)
             else:
                 # compute each cell's color as the average of all pixels in the cell
                 mask = np.where(self.color_map == i, 255, 0)
                 mask = mask.astype(np.uint8)
                 mean = cv2.mean(self.image, mask)
                 mean = [int(x) for x in mean[:3]]  # removing the added 4th dimension and cast to int
-                image_colors[i] = mean
+                if len(self.color_palette) == 0:
+                    # if there is no color palette, set the color to the average of the region
+                    image_colors[i] = mean
+                else:
+                    # otherwise, round this average to the closest available color
+                    if i == 0:
+                        colors = np.array(self.color_palette)
+                    mean = np.array(mean)
+                    distances = np.sqrt(np.sum((colors - mean) ** 2, axis=1))
+                    index_of_smallest = int(np.where(distances == np.amin(distances))[0][0])
+                    image_colors[i] = colors[index_of_smallest]
                 self.progress_bar.setValue(90 + int((i + 1) * 10 / len(self.points)))
         self.diagram = image_colors[self.color_map]
 
@@ -503,13 +535,28 @@ class MainWindow(QMainWindow):
 
         for i in range(num_regions):
             if self.image is None:
-                image_colors[i] = random.choices(range(256), k=3)
+                if len(self.color_palette) == 0:
+                    # if there is no color palette, choose any color
+                    image_colors[i] = random.choices(range(256), k=3)
+                else:
+                    image_colors[i] = random.choice(self.color_palette)
             else:
                 mask = np.where(self.color_map == i, 255, 0)
                 mask = mask.astype(np.uint8)
                 mean = cv2.mean(self.image, mask)
                 mean = [int(x) for x in mean[:3]]
-                image_colors[i] = mean
+                if len(self.color_palette) == 0:
+                    # if there is no color palette, set the color to the average of the region
+                    image_colors[i] = mean
+                else:
+                    # otherwise, round this average to the closest available color
+                    if i == 0:
+                        colors = np.array(self.color_palette)
+                    mean = np.array(mean)
+                    distances = np.sqrt(np.sum((colors - mean) ** 2, axis=1))
+                    index_of_smallest = int(np.where(distances == np.amin(distances))[0][0])
+                    image_colors[i] = colors[index_of_smallest]
+
                 self.progress_bar.setValue(50 + int((i + 1) * 50 / num_regions))
         self.diagram = image_colors[self.color_map]
 
@@ -528,7 +575,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(100)
         self.progress_bar.setFormat(str(round(time() - time_1, 1)) + " s")
 
-        self.find_centers()
+        # self.find_centers()
 
         self.enable_all(True)
         self.set_diagram()
@@ -544,7 +591,16 @@ class MainWindow(QMainWindow):
             w = np.where(self.color_map == i)
             # wa = np.argwhere(self.color_map == i)
             center = (w[1].min() + ((w[1].max() - w[1].min()) // 2), w[0].min() + ((w[0].max() - w[0].min()) // 2))
-            self.diagram = cv2.putText(self.diagram, str(i + 1), center, cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 0), 1)
+            # self.diagram = cv2.putText(self.diagram, str(i + 1), center, cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 0), 0)
+            text_font = cv2.FONT_HERSHEY_PLAIN
+            text_scale = 1
+            text_thickness = 0
+            text = str(i + 1)
+
+            text_size, _ = cv2.getTextSize(text, text_font, text_scale, text_thickness)
+            text_origin = (center[0] - text_size[0] // 2, center[1] + text_size[1] // 2)
+
+            cv2.putText(self.diagram, text, text_origin, text_font, text_scale, (0, 0, 0), text_thickness)
 
         # TODO update self.centers instead of the diagram
 
