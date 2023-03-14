@@ -8,6 +8,7 @@ import random
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import *
 from PyQt6.QtCore import Qt, QDir
+from pyx import canvas, text, path
 from time import time
 
 DEFAULT_WIDTH = 600
@@ -364,6 +365,27 @@ class MainWindow(QMainWindow):
                             f.write(f"{x} {y} ")
                         f.write('" fill="none" stroke="white"/>')
                     f.write("</svg>")
+            else:
+                print("NO LINE DIAGRAM")
+        elif filename[-4:] == '.pdf':
+            if self.line_diagram is not None:
+                region = np.where(self.color_map == 15, 255, 0)
+                region = region.astype('uint8')
+                contours, _ = cv2.findContours(region, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+                print(len(contours))
+                c = canvas.canvas()
+                unicode_engine = text.UnicodeEngine()
+
+                for i in range(len(contours[0])):
+                    x, y = contours[0][i][0]
+                    c.insert(unicode_engine.text(x, y, str(i)))
+
+                # c = canvas.canvas()
+                # unicode_engine = text.UnicodeEngine()
+                # c.insert(unicode_engine.text(0, 0, "1"))
+                # c.stroke(path.line(0, 0, 2, 0))
+                c.writePDFfile("outputs/test.pdf")
+
             else:
                 print("NO LINE DIAGRAM")
         else:
