@@ -8,7 +8,7 @@ import random
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import *
 from PyQt6.QtCore import Qt, QDir
-from pyx import canvas, text, path
+from pyx import canvas, text, path, bbox
 from time import time
 
 DEFAULT_WIDTH = 600
@@ -20,12 +20,12 @@ DEFAULT_ORIENTATION = 'horizontal'
 
 
 # https://lib.byu.edu/services/laser-cutters/
-# TODO: look at pdf file format (look into the PyX package)
 # TODO: save out a file for each color, with pieces flipped and labeled
 # TODO: write a number on each piece, centered and engraved (not cut)
 # delviesplastics.com
 
 # TODO: allow for images of all sizes / resolutions
+# TODO: save a file with all colored pieces and their numbers
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -66,12 +66,15 @@ class MainWindow(QMainWindow):
         self.diagram_frame.setMinimumHeight(DEFAULT_HEIGHT)
         self.diagram_frame.setMinimumWidth(DEFAULT_WIDTH)
 
-        # the 'upload image' button
-        self.upload_image_button = QPushButton("Upload Image")
-        self.upload_image_button.clicked.connect(self.upload_image_clicked)
+        # the 'open image' button
+        self.open_image_button = QPushButton("Open Image")
+        self.open_image_button.clicked.connect(self.open_image_clicked)
         # the 'save image' button
         self.save_result_button = QPushButton("Save Result")
         self.save_result_button.clicked.connect(self.save_result_clicked)
+        # the 'save PDFs' button
+        self.save_pdfs_button = QPushButton("Save PDFs")
+        self.save_pdfs_button.clicked.connect(self.save_pdfs_clicked)
 
         # add the voronoi and superpixel radio buttons
         mode_group = QButtonGroup(self.main_widget)
@@ -183,10 +186,12 @@ class MainWindow(QMainWindow):
         self.main_layout.addLayout(self.frames)
 
         h = QHBoxLayout()
-        # add the 'upload image' button
-        h.addWidget(self.upload_image_button)
+        # add the 'open image' button
+        h.addWidget(self.open_image_button)
         # add the 'save image' button
         h.addWidget(self.save_result_button)
+        # add the 'save PDFs' button
+        h.addWidget(self.save_pdfs_button)
         # add the voronoi and superpixel radio buttons
         h.addWidget(self.voronoi_radio_button)
         h.addWidget(self.superpixel_radio_button)
@@ -252,31 +257,33 @@ class MainWindow(QMainWindow):
         self.setFixedSize(self.main_layout.sizeHint())
 
     @staticmethod
-    def read_color_palette() -> list[tuple]:
+    def read_color_palette() -> dict[str, tuple]:
         if not os.path.exists("palette.txt"):
-            return []
+            return {}
 
-        palette = []
+        palette = {}
         with open("palette.txt", 'r') as f:
             for line in f:
                 if line[0] == '#' or line[0] == '\n':
                     continue
 
+                name, line = line.split(' ', 1)
                 line = line.replace('(', '').replace(')', '')  # remove parens
-                color_tup = tuple(map(int, line.split(', ')))  # form tuple
+                color_tup = tuple(map(int, line.split(',')))  # form tuple
 
                 if len(color_tup) != 3:
                     raise Exception("Invalid palette.txt file: colors should have 3 channels (RGB), one color per line")
                 if min(color_tup) < 0 or max(color_tup) > 255:
                     raise Exception("Invalid palette.txt file: RGB values should be between 0 and 255")
 
-                palette.append(color_tup[::-1])  # reverse the tuple into BGR form
+                # palette.append(color_tup[::-1])  # reverse the tuple into BGR form
+                palette[name] = color_tup[::-1]  # reverse the tuple into BGR form
 
         return palette
 
-    def upload_image_clicked(self) -> None:
+    def open_image_clicked(self) -> None:
         if self.image is None:
-            # upload image
+            # open image
             image_files = None
 
             dialog = QFileDialog(self)
@@ -307,7 +314,7 @@ class MainWindow(QMainWindow):
                 self.image_frame.setPixmap(QPixmap.fromImage(q_image))
 
                 self.set_diagram(reset=True)
-                self.upload_image_button.setText("Clear Image")
+                self.open_image_button.setText("Clear Image")
                 self.check_points_input()
             except Exception as e:
                 print("Exception during file open:", e)
@@ -322,7 +329,7 @@ class MainWindow(QMainWindow):
             self.image_frame.setText("Your Image Will Show Here")
 
             self.set_diagram(reset=True)
-            self.upload_image_button.setText("Upload Image")
+            self.open_image_button.setText("Open Image")
             self.generate_smart_points_button.setEnabled(False)
 
     def save_result_clicked(self) -> None:
@@ -330,7 +337,7 @@ class MainWindow(QMainWindow):
         # "Image (*.png *.jpg *.jpeg)")
 
         if filename == "":
-            print("None entered")
+            # print("None entered")
             return
         if filename[-4:] == '.png' or filename[-4:] == '.jpg' or filename[-5:] == '.jpeg':
             # prepare output to save as image
@@ -367,29 +374,76 @@ class MainWindow(QMainWindow):
                     f.write("</svg>")
             else:
                 print("NO LINE DIAGRAM")
-        elif filename[-4:] == '.pdf':
-            if self.line_diagram is not None:
-                region = np.where(self.color_map == 15, 255, 0)
-                region = region.astype('uint8')
-                contours, _ = cv2.findContours(region, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-                print(len(contours))
-                c = canvas.canvas()
-                unicode_engine = text.UnicodeEngine()
-
-                for i in range(len(contours[0])):
-                    x, y = contours[0][i][0]
-                    c.insert(unicode_engine.text(x, y, str(i)))
-
-                # c = canvas.canvas()
-                # unicode_engine = text.UnicodeEngine()
-                # c.insert(unicode_engine.text(0, 0, "1"))
-                # c.stroke(path.line(0, 0, 2, 0))
-                c.writePDFfile("outputs/test.pdf")
-
-            else:
-                print("NO LINE DIAGRAM")
         else:
             print("BAD FILE EXTENSION")
+
+    def save_pdfs_clicked(self) -> None:
+        if self.line_diagram is None or len(self.color_palette) == 0:
+            print("NO LINE DIAGRAM AND/OR PALETTE")
+            return
+
+        self.enable_all(False)
+
+        time_1 = time()
+
+        self.progress_bar.resetFormat()
+        self.progress_bar.setValue(0)
+
+        unicode_engine = text.UnicodeEngine(size=50)
+        image = self.diagram.copy()
+
+        # draw lines between cells (so neighboring cells of the same color don't combine
+        for i in range(len(image)):
+            for j in range(len(image[i])):
+                if self.line_diagram[i][j]:
+                    image[i][j] = (4, 5, 6)
+
+        for name, color in self.color_palette.items():  # for each specified color...
+            # find areas with that color
+            region = np.all(image == color, axis=-1)
+            region = np.where(region, 255, 0)
+
+            if np.max(region) == 0:  # in this case, the color doesn't appear, skip it
+                # print('Skipped', name)
+                continue
+
+            region = region.astype('uint8')
+            contours, _ = cv2.findContours(region, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+            c = canvas.canvas()
+            for contour in contours:  # for each region...
+                for i in range(len(contour)):  # step through the points of the region
+                    if i == 0:
+                        old_x, old_y = contour[i][0]
+                        old_y = 500 - old_y
+                        continue
+                    x, y = contour[i][0]
+                    y = 500 - y
+                    if i == 1:
+                        p = path.line(old_x, old_y, x, y)
+                        old_x = x
+                        old_y = y
+                    elif i == len(contour) - 1:  # at the end of the path, close it
+                        p = p << path.line(old_x, old_y, x, y)
+                        p.append(path.closepath())
+                    else:
+                        p = p << path.line(old_x, old_y, x, y)
+                        old_x = x
+                        old_y = y
+                    # c.insert(unicode_engine.text(x, y, str(i)))
+
+                if len(contour) > 0:
+                    c.stroke(p)  # draw the path on the canvas
+                    # TODO: put number in region
+                    # c.insert(unicode_engine.text(x, y, str(i)))
+
+            if len(contours) > 0:
+                c.writePDFfile(f"pdfs/{name}.pdf", page_bbox=bbox.bbox(0, 0, 600, 500))
+
+        self.progress_bar.setValue(100)
+        self.progress_bar.setFormat(str(round(time() - time_1, 1)) + " s")
+
+        self.enable_all(True)
 
     def voronoi_mode_clicked(self, checked: bool) -> None:
         if checked:
@@ -488,7 +542,7 @@ class MainWindow(QMainWindow):
                 if len(self.color_palette) == 0:
                     image_colors[i] = random.choices(range(256), k=3)
                 else:
-                    image_colors[i] = random.choice(self.color_palette)
+                    image_colors[i] = random.choice(list(self.color_palette.values()))
             else:
                 # compute each cell's color as the average of all pixels in the cell
                 mask = np.where(self.color_map == i, 255, 0)
@@ -501,7 +555,7 @@ class MainWindow(QMainWindow):
                 else:
                     # otherwise, round this average to the closest available color
                     if i == 0:
-                        colors = np.array(self.color_palette)
+                        colors = np.array(list(self.color_palette.values()))
                     mean = np.array(mean)
                     distances = np.sqrt(np.sum((colors - mean) ** 2, axis=1))
                     index_of_smallest = int(np.where(distances == np.amin(distances))[0][0])
@@ -561,7 +615,7 @@ class MainWindow(QMainWindow):
                     # if there is no color palette, choose any color
                     image_colors[i] = random.choices(range(256), k=3)
                 else:
-                    image_colors[i] = random.choice(self.color_palette)
+                    image_colors[i] = random.choice(list(self.color_palette.values()))
             else:
                 mask = np.where(self.color_map == i, 255, 0)
                 mask = mask.astype(np.uint8)
@@ -573,7 +627,7 @@ class MainWindow(QMainWindow):
                 else:
                     # otherwise, round this average to the closest available color
                     if i == 0:
-                        colors = np.array(self.color_palette)
+                        colors = np.array(list(self.color_palette.values()))
                     mean = np.array(mean)
                     distances = np.sqrt(np.sum((colors - mean) ** 2, axis=1))
                     index_of_smallest = int(np.where(distances == np.amin(distances))[0][0])
@@ -774,8 +828,9 @@ class MainWindow(QMainWindow):
         self.enable_all(True)
 
     def enable_all(self, t_f: bool) -> None:
-        self.upload_image_button.setEnabled(t_f)
+        self.open_image_button.setEnabled(t_f)
         self.save_result_button.setEnabled(t_f)
+        self.save_pdfs_button.setEnabled(t_f)
         self.voronoi_radio_button.setEnabled(t_f)
         self.superpixel_radio_button.setEnabled(t_f)
 
@@ -795,6 +850,9 @@ class MainWindow(QMainWindow):
         self.toggle_lines_box.setEnabled(t_f)
         self.toggle_colors_box.setEnabled(t_f)
         self.generate_diagram_button.setEnabled(t_f)
+
+        self.vertical_radio_button.setEnabled(t_f)
+        self.horizontal_radio_button.setEnabled(t_f)
 
         if t_f:
             self.check_points_input()
