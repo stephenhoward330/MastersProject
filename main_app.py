@@ -6,26 +6,24 @@ import cv2.ximgproc as ximg
 import numpy as np
 import random
 from PyQt6.QtGui import QImage, QPixmap
-from PyQt6.QtWidgets import *
+from PyQt6.QtWidgets import QMainWindow, QHBoxLayout, QVBoxLayout, QWidget, QRadioButton, QButtonGroup, QCheckBox, \
+    QLabel, QFrame, QFileDialog, QPushButton, QLineEdit, QProgressBar, QApplication
 from PyQt6.QtCore import Qt, QDir
-from pyx import canvas, text, path, bbox
+from pyx import canvas, text, path, bbox, style, color
 from time import time
 
 DEFAULT_WIDTH = 600
 DEFAULT_HEIGHT = 500
 DEFAULT_NUM_POINTS = 500
-DEFAULT_REGION_SIZE = 32
+DEFAULT_REGION_SIZE = 64
 DEFAULT_ITERATIONS = 20
 DEFAULT_ORIENTATION = 'horizontal'
 
-
-# https://lib.byu.edu/services/laser-cutters/
-# TODO: save out a file for each color, with pieces flipped and labeled
-# TODO: write a number on each piece, centered and engraved (not cut)
-# delviesplastics.com
-
 # TODO: allow for images of all sizes / resolutions
-# TODO: save a file with all colored pieces and their numbers
+# TODO: determine new color palette
+# TODO: move pieces together to save space
+# TODO: specify size of the thing (8" x 12")
+
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -35,7 +33,6 @@ class MainWindow(QMainWindow):
         self.line_diagram = None
         self.image = None
         self.color_map = None
-        self.centers = None
         self.color_palette = self.read_color_palette()
 
         self.show_points = True
@@ -389,18 +386,38 @@ class MainWindow(QMainWindow):
         self.progress_bar.resetFormat()
         self.progress_bar.setValue(0)
 
-        unicode_engine = text.UnicodeEngine(size=50)
+        centers = self.find_centers()
+        full = self.draw_diagram(True)
+
+        # create the reference image (to help put it back together again)
+        text_font = cv2.FONT_HERSHEY_PLAIN
+        text_scale = 1
+        text_thickness = 0
+        for i in range(1, centers.max() + 1):
+            center = np.where(centers == i)
+            text_num = str(i)
+            text_size, _ = cv2.getTextSize(text_num, text_font, text_scale, text_thickness)
+            text_origin = (center[1][0] - text_size[0] // 2, center[0][0] + text_size[1] // 2)
+
+            cv2.putText(full, text_num, text_origin, text_font, text_scale, (0, 0, 0), text_thickness)
+        cv2.imwrite("pdfs/Reference.png", full)
+
+        unicode_engine = text.UnicodeEngine(size=300)
         image = self.diagram.copy()
+
+        self.progress_bar.setValue(20)
 
         # draw lines between cells (so neighboring cells of the same color don't combine
         for i in range(len(image)):
             for j in range(len(image[i])):
                 if self.line_diagram[i][j]:
-                    image[i][j] = (4, 5, 6)
+                    image[i][j] = (4, 5, 6)  # dummy value
 
-        for name, color in self.color_palette.items():  # for each specified color...
+        self.progress_bar.setValue(30)
+
+        for j, (name, rgb_color) in enumerate(self.color_palette.items()):  # for each specified color...
             # find areas with that color
-            region = np.all(image == color, axis=-1)
+            region = np.all(image == rgb_color, axis=-1)
             region = np.where(region, 255, 0)
 
             if np.max(region) == 0:  # in this case, the color doesn't appear, skip it
@@ -410,15 +427,32 @@ class MainWindow(QMainWindow):
             region = region.astype('uint8')
             contours, _ = cv2.findContours(region, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
+            # this code will remove some redundant points from the contours, smoothing lines
+            reduced_contours = []
+            for contour in contours:
+                new_contour = []
+                for i in range(len(contour)):
+                    if i == 0:
+                        new_contour.append(contour[i][0])
+                        continue
+                    elif i == len(contour) - 1:
+                        new_contour.append(contour[i][0])
+                        break
+                    a_x, a_y = contour[i-1][0]
+                    b_x, b_y = contour[i][0]
+                    c_x, c_y = contour[i+1][0]
+                    if not self.is_between(a_x, a_y, b_x, b_y, c_x, c_y):
+                        new_contour.append(contour[i][0])
+                reduced_contours.append(new_contour)
+
             c = canvas.canvas()
-            for contour in contours:  # for each region...
+            for contour in reduced_contours:  # for each region...
                 for i in range(len(contour)):  # step through the points of the region
                     if i == 0:
-                        old_x, old_y = contour[i][0]
-                        old_y = 500 - old_y
+                        old_x, old_y = contour[i]
+                        contour_number = self.color_map[old_y+3][old_x+3]  # find the corresponding color map region
                         continue
-                    x, y = contour[i][0]
-                    y = 500 - y
+                    x, y = contour[i]
                     if i == 1:
                         p = path.line(old_x, old_y, x, y)
                         old_x = x
@@ -433,17 +467,44 @@ class MainWindow(QMainWindow):
                     # c.insert(unicode_engine.text(x, y, str(i)))
 
                 if len(contour) > 0:
-                    c.stroke(p)  # draw the path on the canvas
-                    # TODO: put number in region
-                    # c.insert(unicode_engine.text(x, y, str(i)))
+                    # draw the path on the canvas
+                    c.stroke(p, [style.linewidth(0.1), color.rgb.red])
+                    # put number in region
+                    number_loc = np.where(centers == contour_number+1)  # printed numbers are 1-based, not 0-based
+                    c.insert(unicode_engine.text(number_loc[1][0], number_loc[0][0], str(contour_number+1),
+                                                 [text.halign.center]))
 
             if len(contours) > 0:
-                c.writePDFfile(f"pdfs/{name}.pdf", page_bbox=bbox.bbox(0, 0, 600, 500))
+                c.writePDFfile(f"pdfs/{name}.pdf", page_bbox=bbox.bbox(0, 0, self.im_width, self.im_height))
+
+            self.progress_bar.setValue(30 + int((j + 1) * 70 / len(self.color_palette)))
 
         self.progress_bar.setValue(100)
         self.progress_bar.setFormat(str(round(time() - time_1, 1)) + " s")
 
         self.enable_all(True)
+
+    @staticmethod
+    def is_between(a_x, a_y, b_x, b_y, c_x, c_y) -> bool:
+        # helper method for smoothing lines in save_pdfs_clicked()
+        cross_product = (c_y - a_y) * (b_x - a_x) - (c_x - a_x) * (b_y - a_y)
+
+        # compare versus epsilon for floating point values, or != 0 if using integers
+        if abs(cross_product) > 0.5:
+            return False
+        return True
+
+    def find_centers(self) -> np.ndarray:
+        # finds centers of each region in the color map
+        centers = np.zeros((self.im_height, self.im_width), np.int32)
+
+        for i in range(self.color_map.max() + 1):
+            w = np.where(self.color_map == i)
+            center = (w[1].min() + ((w[1].max() - w[1].min()) // 2), w[0].min() + ((w[0].max() - w[0].min()) // 2))
+
+            centers[center[1]][center[0]] = i + 1
+
+        return centers
 
     def voronoi_mode_clicked(self, checked: bool) -> None:
         if checked:
@@ -651,34 +712,8 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(100)
         self.progress_bar.setFormat(str(round(time() - time_1, 1)) + " s")
 
-        # self.find_centers()
-
         self.enable_all(True)
         self.set_diagram()
-
-    def find_centers(self) -> None:
-        # only useful after voronoi or superpixels has established a color map
-        if self.color_map is None:
-            return
-
-        self.centers = np.zeros((self.im_height, self.im_width), np.int32)
-
-        for i in range(self.color_map.max() + 1):
-            w = np.where(self.color_map == i)
-            # wa = np.argwhere(self.color_map == i)
-            center = (w[1].min() + ((w[1].max() - w[1].min()) // 2), w[0].min() + ((w[0].max() - w[0].min()) // 2))
-            # self.diagram = cv2.putText(self.diagram, str(i + 1), center, cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 0), 0)
-            text_font = cv2.FONT_HERSHEY_PLAIN
-            text_scale = 1
-            text_thickness = 0
-            text = str(i + 1)
-
-            text_size, _ = cv2.getTextSize(text, text_font, text_scale, text_thickness)
-            text_origin = (center[0] - text_size[0] // 2, center[1] + text_size[1] // 2)
-
-            cv2.putText(self.diagram, text, text_origin, text_font, text_scale, (0, 0, 0), text_thickness)
-
-        # TODO update self.centers instead of the diagram
 
     def vertical_orientation_clicked(self, checked: bool) -> None:
         if checked:
@@ -720,15 +755,15 @@ class MainWindow(QMainWindow):
         self.diagram_frame.setPixmap(QPixmap.fromImage(q_image))
 
     # adds points, lines, and colors to the diagram if desired
-    def draw_diagram(self) -> np.ndarray:
+    def draw_diagram(self, all_on: bool = False) -> np.ndarray:
         # get the colored diagram (or not)
-        if self.show_colors:
+        if self.show_colors or all_on:
             image = self.diagram.copy()
         else:
             image = np.full((self.im_height, self.im_width, 3), 255, np.uint8)
 
         # add the points to the canvas (or not)
-        if self.mode == "voronoi" and self.show_points:
+        if not all_on and self.mode == "voronoi" and self.show_points:
             if len(self.points) >= 3000:
                 radius = 0
             elif len(self.points) >= 200:
@@ -741,7 +776,7 @@ class MainWindow(QMainWindow):
                 image = cv2.circle(image, (pt[0], pt[1]), radius, (0, 0, 0), -1)
 
         # add the lines to the canvas (or not)
-        if self.show_lines and self.line_diagram is not None:
+        if all_on or self.show_lines and self.line_diagram is not None:
             # black_img = np.zeros((500, 600, 3))
             # image = np.where(self.line_diagram is True, black_img, image)
             for i in range(len(image)):
