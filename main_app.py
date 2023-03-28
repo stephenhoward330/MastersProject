@@ -5,11 +5,12 @@ import cv2
 import cv2.ximgproc as ximg
 import numpy as np
 import random
+import typing
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import QMainWindow, QHBoxLayout, QVBoxLayout, QWidget, QRadioButton, QButtonGroup, QCheckBox, \
     QLabel, QFrame, QFileDialog, QPushButton, QLineEdit, QProgressBar, QApplication
 from PyQt6.QtCore import Qt, QDir
-from pyx import canvas, text, path, bbox, style, color
+from pyx import canvas, text, path, bbox, style, color, unit
 from time import time
 
 DEFAULT_WIDTH = 600
@@ -20,7 +21,6 @@ DEFAULT_ITERATIONS = 20
 DEFAULT_ORIENTATION = 'horizontal'
 
 # TODO: allow for images of all sizes / resolutions
-# TODO: determine new color palette
 # TODO: move pieces together to save space
 # TODO: specify size of the thing (8" x 12")
 
@@ -254,7 +254,7 @@ class MainWindow(QMainWindow):
         self.setFixedSize(self.main_layout.sizeHint())
 
     @staticmethod
-    def read_color_palette() -> dict[str, tuple]:
+    def read_color_palette() -> typing.Dict[str, tuple]:
         if not os.path.exists("palette.txt"):
             return {}
 
@@ -381,6 +381,15 @@ class MainWindow(QMainWindow):
 
         self.enable_all(False)
 
+        # clear pdfs folder
+        for filename in os.listdir("pdfs"):
+            file_path = os.path.join("pdfs", filename)
+            if os.path.isfile(file_path):
+                try:
+                    os.remove(file_path)
+                except OSError as e:
+                    print('Failed to delete %s. Reason: %s' % (file_path, e))
+
         time_1 = time()
 
         self.progress_bar.resetFormat()
@@ -402,6 +411,7 @@ class MainWindow(QMainWindow):
             cv2.putText(full, text_num, text_origin, text_font, text_scale, (0, 0, 0), text_thickness)
         cv2.imwrite("pdfs/Reference.png", full)
 
+        unit.set(defaultunit="inch")
         unicode_engine = text.UnicodeEngine(size=300)
         image = self.diagram.copy()
 
