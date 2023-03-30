@@ -23,6 +23,9 @@ DEFAULT_ORIENTATION = 'horizontal'
 # TODO: allow for images of all sizes / resolutions
 # TODO: move pieces together to save space
 # TODO: specify size of the thing (8" x 12")
+# TODO: ditch findContours, find points with 3 regions
+#   TODO: pad around the image to find lines against the edge. Add corners
+#   TODO: consider the angles from the center to the points for ordering
 
 
 class MainWindow(QMainWindow):
@@ -412,7 +415,7 @@ class MainWindow(QMainWindow):
         cv2.imwrite("pdfs/Reference.png", full)
 
         unit.set(defaultunit="inch")
-        unicode_engine = text.UnicodeEngine(size=300)
+        unicode_engine = text.UnicodeEngine(size=10)
         image = self.diagram.copy()
 
         self.progress_bar.setValue(20)
@@ -464,28 +467,28 @@ class MainWindow(QMainWindow):
                         continue
                     x, y = contour[i]
                     if i == 1:
-                        p = path.line(old_x, old_y, x, y)
+                        p = path.line(old_x/100, old_y/100, x/100, y/100)
                         old_x = x
                         old_y = y
                     elif i == len(contour) - 1:  # at the end of the path, close it
-                        p = p << path.line(old_x, old_y, x, y)
+                        p = p << path.line(old_x/100, old_y/100, x/100, y/100)
                         p.append(path.closepath())
                     else:
-                        p = p << path.line(old_x, old_y, x, y)
+                        p = p << path.line(old_x/100, old_y/100, x/100, y/100)
                         old_x = x
                         old_y = y
                     # c.insert(unicode_engine.text(x, y, str(i)))
 
                 if len(contour) > 0:
                     # draw the path on the canvas
-                    c.stroke(p, [style.linewidth(0.1), color.rgb.red])
+                    c.stroke(p, [color.rgb.red])  # style.linewidth(0.1),
                     # put number in region
                     number_loc = np.where(centers == contour_number+1)  # printed numbers are 1-based, not 0-based
-                    c.insert(unicode_engine.text(number_loc[1][0], number_loc[0][0], str(contour_number+1),
+                    c.insert(unicode_engine.text(number_loc[1][0]/100, number_loc[0][0]/100, str(contour_number+1),
                                                  [text.halign.center]))
 
             if len(contours) > 0:
-                c.writePDFfile(f"pdfs/{name}.pdf", page_bbox=bbox.bbox(0, 0, self.im_width, self.im_height))
+                c.writePDFfile(f"pdfs/{name}.pdf", page_bbox=bbox.bbox(0, 0, 6, 5))
 
             self.progress_bar.setValue(30 + int((j + 1) * 70 / len(self.color_palette)))
 
@@ -733,8 +736,8 @@ class MainWindow(QMainWindow):
         if checked:
             self.init_layout('horizontal')
 
-    # check input of the 'num points' field
     def check_points_input(self) -> None:
+        # check input of the 'num points' field
         if self.num_points_field.text().isdigit() and int(self.num_points_field.text()) >= 1:
             self.generate_random_points_button.setEnabled(True)
             if self.image is not None:
@@ -750,8 +753,8 @@ class MainWindow(QMainWindow):
         else:
             self.generate_diagram_button.setEnabled(False)
 
-    # sets the voronoi_diagram in the frame
     def set_diagram(self, reset: bool = False) -> None:
+        # sets the voronoi_diagram in the frame
         # get a new blank canvas
         if reset:
             self.diagram = np.full((self.im_height, self.im_width, 3), 255, np.uint8)
@@ -764,8 +767,8 @@ class MainWindow(QMainWindow):
         q_image = QImage(image.data, self.im_width, self.im_height, QImage.Format.Format_BGR888)
         self.diagram_frame.setPixmap(QPixmap.fromImage(q_image))
 
-    # adds points, lines, and colors to the diagram if desired
     def draw_diagram(self, all_on: bool = False) -> np.ndarray:
+        # adds points, lines, and colors to the diagram if desired
         # get the colored diagram (or not)
         if self.show_colors or all_on:
             image = self.diagram.copy()
@@ -796,8 +799,8 @@ class MainWindow(QMainWindow):
 
         return image
 
-    # generate new, random points
     def generate_random_points(self, num_points: int) -> None:
+        # generate new, random points
         self.enable_all(False)
 
         time_1 = time()
@@ -820,8 +823,8 @@ class MainWindow(QMainWindow):
 
         self.enable_all(True)
 
-    # generate new, smart points
     def generate_smart_points(self, num_points: int) -> None:
+        # generate new, smart points
         self.enable_all(False)
 
         time_1 = time()
