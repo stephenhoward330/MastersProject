@@ -1,6 +1,7 @@
 import os
 import sys
 
+import math
 import cv2
 import cv2.ximgproc as ximg
 import numpy as np
@@ -23,9 +24,6 @@ DEFAULT_ORIENTATION = 'horizontal'
 # TODO: allow for images of all sizes / resolutions
 # TODO: move pieces together to save space
 # TODO: specify size of the thing (8" x 12")
-# TODO: ditch findContours, find points with 3 regions
-#   TODO: pad around the image to find lines against the edge. Add corners
-#   TODO: consider the angles from the center to the points for ordering
 
 
 class MainWindow(QMainWindow):
@@ -36,7 +34,8 @@ class MainWindow(QMainWindow):
         self.line_diagram = None
         self.image = None
         self.color_map = None
-        self.color_palette = self.read_color_palette()
+        self.color_palette_rgb = self.read_color_palette()  # dict of names: rgb
+        self.color_palette_regions = None  # dict of names: list of regions
 
         self.show_points = True
         self.show_lines = True
@@ -75,6 +74,8 @@ class MainWindow(QMainWindow):
         # the 'save PDFs' button
         self.save_pdfs_button = QPushButton("Save PDFs")
         self.save_pdfs_button.clicked.connect(self.save_pdfs_clicked)
+        if len(self.color_palette_rgb) == 0:
+            self.save_pdfs_button.setEnabled(False)
 
         # add the voronoi and superpixel radio buttons
         mode_group = QButtonGroup(self.main_widget)
@@ -281,6 +282,11 @@ class MainWindow(QMainWindow):
 
         return palette
 
+    def reset_palette_regions(self):
+        self.color_palette_regions = {}
+        for name in self.color_palette_rgb.keys():
+            self.color_palette_regions[name] = []
+
     def open_image_clicked(self) -> None:
         if self.image is None:
             # open image
@@ -378,11 +384,13 @@ class MainWindow(QMainWindow):
             print("BAD FILE EXTENSION")
 
     def save_pdfs_clicked(self) -> None:
-        if self.line_diagram is None or len(self.color_palette) == 0:
+        if self.line_diagram is None or len(self.color_palette_rgb) == 0:
             print("NO LINE DIAGRAM AND/OR PALETTE")
             return
 
         self.enable_all(False)
+
+        time_1 = time()
 
         # clear pdfs folder
         for filename in os.listdir("pdfs"):
@@ -393,15 +401,19 @@ class MainWindow(QMainWindow):
                 except OSError as e:
                     print('Failed to delete %s. Reason: %s' % (file_path, e))
 
-        time_1 = time()
-
         self.progress_bar.resetFormat()
         self.progress_bar.setValue(0)
 
+        # find centers of each region
         centers = self.find_centers()
-        full = self.draw_diagram(True)
+        self.progress_bar.setValue(10)
+
+        # find corners between regions
+        contours = self.find_corners(centers)
+        self.progress_bar.setValue(40)
 
         # create the reference image (to help put it back together again)
+        full = self.draw_diagram(True)
         text_font = cv2.FONT_HERSHEY_PLAIN
         text_scale = 1
         text_thickness = 0
@@ -415,57 +427,23 @@ class MainWindow(QMainWindow):
         cv2.imwrite("pdfs/Reference.png", full)
 
         unit.set(defaultunit="inch")
-        unicode_engine = text.UnicodeEngine(size=10)
-        image = self.diagram.copy()
+        engine = text.UnicodeEngine(size=8)
 
-        self.progress_bar.setValue(20)
+        self.progress_bar.setValue(50)
 
-        # draw lines between cells (so neighboring cells of the same color don't combine
-        for i in range(len(image)):
-            for j in range(len(image[i])):
-                if self.line_diagram[i][j]:
-                    image[i][j] = (4, 5, 6)  # dummy value
+        for j, (name, rgb_color) in enumerate(self.color_palette_rgb.items()):  # for each specified color...
 
-        self.progress_bar.setValue(30)
-
-        for j, (name, rgb_color) in enumerate(self.color_palette.items()):  # for each specified color...
-            # find areas with that color
-            region = np.all(image == rgb_color, axis=-1)
-            region = np.where(region, 255, 0)
-
-            if np.max(region) == 0:  # in this case, the color doesn't appear, skip it
-                # print('Skipped', name)
+            if len(self.color_palette_regions[name]) == 0:  # in this case, the color doesn't appear, skip it
                 continue
 
-            region = region.astype('uint8')
-            contours, _ = cv2.findContours(region, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-
-            # this code will remove some redundant points from the contours, smoothing lines
-            reduced_contours = []
-            for contour in contours:
-                new_contour = []
-                for i in range(len(contour)):
-                    if i == 0:
-                        new_contour.append(contour[i][0])
-                        continue
-                    elif i == len(contour) - 1:
-                        new_contour.append(contour[i][0])
-                        break
-                    a_x, a_y = contour[i-1][0]
-                    b_x, b_y = contour[i][0]
-                    c_x, c_y = contour[i+1][0]
-                    if not self.is_between(a_x, a_y, b_x, b_y, c_x, c_y):
-                        new_contour.append(contour[i][0])
-                reduced_contours.append(new_contour)
-
             c = canvas.canvas()
-            for contour in reduced_contours:  # for each region...
+            for contour_number in self.color_palette_regions[name]:  # for each region...
+                contour = contours[contour_number]
                 for i in range(len(contour)):  # step through the points of the region
                     if i == 0:
-                        old_x, old_y = contour[i]
-                        contour_number = self.color_map[old_y+3][old_x+3]  # find the corresponding color map region
+                        old_y, old_x = contour[i]
                         continue
-                    x, y = contour[i]
+                    y, x = contour[i]
                     if i == 1:
                         p = path.line(old_x/100, old_y/100, x/100, y/100)
                         old_x = x
@@ -477,35 +455,24 @@ class MainWindow(QMainWindow):
                         p = p << path.line(old_x/100, old_y/100, x/100, y/100)
                         old_x = x
                         old_y = y
-                    # c.insert(unicode_engine.text(x, y, str(i)))
 
                 if len(contour) > 0:
                     # draw the path on the canvas
                     c.stroke(p, [color.rgb.red])  # style.linewidth(0.1),
                     # put number in region
                     number_loc = np.where(centers == contour_number+1)  # printed numbers are 1-based, not 0-based
-                    c.insert(unicode_engine.text(number_loc[1][0]/100, number_loc[0][0]/100, str(contour_number+1),
-                                                 [text.halign.center]))
+                    c.insert(engine.text(number_loc[1][0]/100, number_loc[0][0]/100, str(contour_number+1),
+                                         [text.halign.center]))
 
             if len(contours) > 0:
                 c.writePDFfile(f"pdfs/{name}.pdf", page_bbox=bbox.bbox(0, 0, 6, 5))
 
-            self.progress_bar.setValue(30 + int((j + 1) * 70 / len(self.color_palette)))
+            self.progress_bar.setValue(50 + int((j + 1) * 50 / len(self.color_palette_rgb)))
 
         self.progress_bar.setValue(100)
         self.progress_bar.setFormat(str(round(time() - time_1, 1)) + " s")
 
         self.enable_all(True)
-
-    @staticmethod
-    def is_between(a_x, a_y, b_x, b_y, c_x, c_y) -> bool:
-        # helper method for smoothing lines in save_pdfs_clicked()
-        cross_product = (c_y - a_y) * (b_x - a_x) - (c_x - a_x) * (b_y - a_y)
-
-        # compare versus epsilon for floating point values, or != 0 if using integers
-        if abs(cross_product) > 0.5:
-            return False
-        return True
 
     def find_centers(self) -> np.ndarray:
         # finds centers of each region in the color map
@@ -518,6 +485,67 @@ class MainWindow(QMainWindow):
             centers[center[1]][center[0]] = i + 1
 
         return centers
+
+    def find_corners(self, centers) -> typing.List[list]:
+        assert self.color_map is not None
+
+        regions = [[] for _ in range(self.color_map.max()+1)]  # list of lists, list i has the corners of region i
+        margin_map = self.color_map.copy()
+        margin_map = np.pad(margin_map, 5, constant_values=-1)
+
+        # find all the corners
+        for i in range(len(margin_map)):
+            if i < 4 or i > len(margin_map)-5:  # in a margin area
+                continue
+            for j in range(len(margin_map[i])):
+                if j < 4 or j > len(margin_map[i]) - 5:  # in a margin area
+                    continue
+
+                # look at a 2x2 window
+                window_set = set()
+                window_set.add(margin_map[i][j])
+                window_set.add(margin_map[i+1][j])
+                window_set.add(margin_map[i][j+1])
+                window_set.add(margin_map[i+1][j+1])
+
+                if len(window_set) > 2:  # more than 2 regions represented in the window = corner
+                    y = i
+                    x = j
+
+                    # adjust to ensure point is in bounds
+                    if i <= 4:
+                        y += 1
+                    elif i >= len(margin_map) - 5:
+                        y -= 1
+                    if j <= 4:
+                        x += 1
+                    elif j >= len(margin_map[0]) - 5:
+                        x -= 1
+
+                    pt = (y-5, x-5)
+                    for num in window_set:
+                        if num == -1:
+                            continue
+                        regions[num].append(pt)
+
+        # add corners at corners of image
+        regions[self.color_map[0, 0]].append((0, 0))
+        regions[self.color_map[self.im_height-1, 0]].append((self.im_height-1, 0))
+        regions[self.color_map[0, self.im_width-1]].append((0, self.im_width-1))
+        regions[self.color_map[self.im_height-1, self.im_width-1]].append((self.im_height-1, self.im_width-1))
+
+        # order the corners in each region clockwise
+        def angle_between(p1, p2, c):
+            x1, y1 = p1[0] - c[0], p1[1] - c[1]
+            x2, y2 = p2[0] - c[0], p2[1] - c[1]
+            return math.atan2(x1 * y2 - y1 * x2, x1 * x2 + y1 * y2)
+
+        for i in range(len(regions)):
+            center = np.where(centers == i+1)
+            sorted_points = sorted(regions[i], key=lambda p: angle_between(p, (1, 0), center))
+            regions[i] = sorted_points
+
+        return regions
 
     def voronoi_mode_clicked(self, checked: bool) -> None:
         if checked:
@@ -586,6 +614,8 @@ class MainWindow(QMainWindow):
         self.progress_bar.resetFormat()
         self.progress_bar.setValue(0)
 
+        self.reset_palette_regions()
+
         depth_map = None
         # the color map has a different integer for each area
         self.color_map = np.zeros((self.im_height, self.im_width), np.int32)
@@ -609,43 +639,7 @@ class MainWindow(QMainWindow):
 
             self.progress_bar.setValue(int((i + 1) * 90 / len(self.points)))
 
-        image_colors = np.empty((len(self.points), 3), dtype=np.uint8)
-
-        for i in range(len(self.points)):
-            if self.image is None:
-                if len(self.color_palette) == 0:
-                    image_colors[i] = random.choices(range(256), k=3)
-                else:
-                    image_colors[i] = random.choice(list(self.color_palette.values()))
-            else:
-                # compute each cell's color as the average of all pixels in the cell
-                mask = np.where(self.color_map == i, 255, 0)
-                mask = mask.astype(np.uint8)
-                mean = cv2.mean(self.image, mask)
-                mean = [int(x) for x in mean[:3]]  # removing the added 4th dimension and cast to int
-                if len(self.color_palette) == 0:
-                    # if there is no color palette, set the color to the average of the region
-                    image_colors[i] = mean
-                else:
-                    # otherwise, round this average to the closest available color
-                    if i == 0:
-                        colors = np.array(list(self.color_palette.values()))
-                    mean = np.array(mean)
-                    distances = np.sqrt(np.sum((colors - mean) ** 2, axis=1))
-                    index_of_smallest = int(np.where(distances == np.amin(distances))[0][0])
-                    image_colors[i] = colors[index_of_smallest]
-                self.progress_bar.setValue(90 + int((i + 1) * 10 / len(self.points)))
-        self.diagram = image_colors[self.color_map]
-
-        # find the lines (borders between colors)
-        # vertical borders
-        v_lines = np.where(self.color_map[:-1] != self.color_map[1:], True, False)
-        v_lines = np.vstack([[False] * self.im_width, v_lines])
-        # horizontal borders
-        h_lines = np.where(self.color_map[:, :-1] != self.color_map[:, 1:], True, False)
-        h_lines = np.hstack([[[False]] * self.im_height, h_lines])
-        # combine and save it
-        self.line_diagram = h_lines | v_lines
+        self.color_and_find_lines(len(self.points), 90)
 
         self.progress_bar.setValue(100)
         self.progress_bar.setFormat(str(round(time() - time_1, 1)) + " s")
@@ -661,6 +655,8 @@ class MainWindow(QMainWindow):
         self.progress_bar.resetFormat()
         self.progress_bar.setValue(0)
 
+        self.reset_palette_regions()
+
         if self.image is None:
             im = np.full((self.im_height, self.im_width, 3), 255, np.uint8)
         else:
@@ -674,40 +670,53 @@ class MainWindow(QMainWindow):
         cv_slic = ximg.createSuperpixelSLIC(src_lab, algorithm=ximg.SLICO,
                                             region_size=int(self.region_size_field.text()))
 
-        # for _ in range(int(self.iterations_field.text())):
-        #     cv_slic.iterate(1)
         cv_slic.iterate(int(self.iterations_field.text()))
 
         self.color_map = cv_slic.getLabels()
         num_regions = cv_slic.getNumberOfSuperpixels()
 
+        self.color_and_find_lines(num_regions, 50)
+
+        self.num_superpixels_field.setText('Superpixels: ' + str(num_regions))
+
+        self.progress_bar.setValue(100)
+        self.progress_bar.setFormat(str(round(time() - time_1, 1)) + " s")
+
+        self.enable_all(True)
+        self.set_diagram()
+
+    def color_and_find_lines(self, num_regions, progress_so_far):
         image_colors = np.empty((num_regions, 3), dtype=np.uint8)
 
         for i in range(num_regions):
             if self.image is None:
-                if len(self.color_palette) == 0:
+                if len(self.color_palette_rgb) == 0:
                     # if there is no color palette, choose any color
                     image_colors[i] = random.choices(range(256), k=3)
                 else:
-                    image_colors[i] = random.choice(list(self.color_palette.values()))
+                    random_color_name = random.choice(list(self.color_palette_rgb.keys()))
+                    image_colors[i] = self.color_palette_rgb[random_color_name]
+                    self.color_palette_regions[random_color_name].append(i)
             else:
                 mask = np.where(self.color_map == i, 255, 0)
                 mask = mask.astype(np.uint8)
                 mean = cv2.mean(self.image, mask)
                 mean = [int(x) for x in mean[:3]]
-                if len(self.color_palette) == 0:
+                if len(self.color_palette_rgb) == 0:
                     # if there is no color palette, set the color to the average of the region
                     image_colors[i] = mean
                 else:
                     # otherwise, round this average to the closest available color
                     if i == 0:
-                        colors = np.array(list(self.color_palette.values()))
+                        colors = np.array(list(self.color_palette_rgb.values()))
+                        names = list(self.color_palette_rgb.keys())
                     mean = np.array(mean)
                     distances = np.sqrt(np.sum((colors - mean) ** 2, axis=1))
                     index_of_smallest = int(np.where(distances == np.amin(distances))[0][0])
                     image_colors[i] = colors[index_of_smallest]
+                    self.color_palette_regions[names[index_of_smallest]].append(i)
 
-                self.progress_bar.setValue(50 + int((i + 1) * 50 / num_regions))
+                self.progress_bar.setValue(progress_so_far + int((i + 1) * (100-progress_so_far) / num_regions))
         self.diagram = image_colors[self.color_map]
 
         # find the lines (borders between colors)
@@ -719,14 +728,6 @@ class MainWindow(QMainWindow):
         h_lines = np.hstack([[[False]] * self.im_height, h_lines])
         # combine and save it
         self.line_diagram = h_lines | v_lines
-
-        self.num_superpixels_field.setText('Superpixels: ' + str(num_regions))
-
-        self.progress_bar.setValue(100)
-        self.progress_bar.setFormat(str(round(time() - time_1, 1)) + " s")
-
-        self.enable_all(True)
-        self.set_diagram()
 
     def vertical_orientation_clicked(self, checked: bool) -> None:
         if checked:
@@ -878,7 +879,8 @@ class MainWindow(QMainWindow):
     def enable_all(self, t_f: bool) -> None:
         self.open_image_button.setEnabled(t_f)
         self.save_result_button.setEnabled(t_f)
-        self.save_pdfs_button.setEnabled(t_f)
+        if len(self.color_palette_rgb) > 0:
+            self.save_pdfs_button.setEnabled(t_f)
         self.voronoi_radio_button.setEnabled(t_f)
         self.superpixel_radio_button.setEnabled(t_f)
 
