@@ -16,14 +16,65 @@ from time import time
 
 DEFAULT_WIDTH = 600
 DEFAULT_HEIGHT = 500
-DEFAULT_NUM_POINTS = 500
+DEFAULT_NUM_POINTS = 250
 DEFAULT_REGION_SIZE = 64
 DEFAULT_ITERATIONS = 20
 DEFAULT_ORIENTATION = 'horizontal'
 
+# desired physical size of the final completed diagram in inches
+PDF_WIDTH = 6
+PDF_HEIGHT = 5
+
+# size of the material (each color) in inches
+MATERIAL_WIDTH = 12
+MATERIAL_HEIGHT = 8
+
 # TODO: allow for images of all sizes / resolutions
 # TODO: move pieces together to save space
-# TODO: specify size of the thing (8" x 12")
+
+
+class Region:
+    def __init__(self, center: tuple = None, corners: list = None, size: tuple = None, location: tuple = None):
+        self.center = center
+        self.corners = corners
+        self.size = size
+        self.location = location
+
+    def calc_size(self) -> None:
+        if len(self.corners) == 0:
+            self.size = 0
+
+        max_y = -np.inf
+        max_x = -np.inf
+        min_y = np.inf
+        min_x = np.inf
+
+        for y, x in self.corners:
+            if y > max_y:
+                max_y = y
+            if y < min_y:
+                min_y = y
+            if x > max_x:
+                max_x = x
+            if x < min_x:
+                min_x = x
+
+        self.size = max_y - min_y, max_x - min_x
+        self.location = min_y, min_x
+
+    def scale_corners(self, y_scale, x_scale, y_offset, x_offset) -> list:
+        assert self.size is not None
+        corners = [(y - self.location[0], x - self.location[1]) for y, x in self.corners]
+        return [(y * y_scale + y_offset, x * x_scale + x_offset) for y, x in corners]
+
+    def scale_size(self, y_scale, x_scale) -> tuple:
+        if self.size is None:
+            return -1, -1
+        return self.size[0] * y_scale, self.size[1] * x_scale
+
+    def scale_center(self, y_scale, x_scale, y_offset, x_offset):
+        return (self.center[0] - self.location[0]) * y_scale + y_offset, \
+            (self.center[1] - self.location[1]) * x_scale + x_offset
 
 
 class MainWindow(QMainWindow):
@@ -36,6 +87,7 @@ class MainWindow(QMainWindow):
         self.color_map = None
         self.color_palette_rgb = self.read_color_palette()  # dict of names: rgb
         self.color_palette_regions = None  # dict of names: list of regions
+        self.regions = None
 
         self.show_points = True
         self.show_lines = True
@@ -343,7 +395,6 @@ class MainWindow(QMainWindow):
         # "Image (*.png *.jpg *.jpeg)")
 
         if filename == "":
-            # print("None entered")
             return
         if filename[-4:] == '.png' or filename[-4:] == '.jpg' or filename[-5:] == '.jpeg':
             # prepare output to save as image
@@ -359,27 +410,27 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print("Exception during file save:", e)
                 quit()
-        elif filename[-4:] == '.svg':
-            # convert image to .svg format (for a laser cutter)
-            # https://stackoverflow.com/questions/43108751/convert-contour-paths-to-svg-paths
-            if self.line_diagram is not None:
-                # im_gray = cv2.cvtColor(self.line_diagram, cv2.COLOR_BGR2GRAY)
-                # _, thresh = cv2.threshold(im_gray, 127, 255, 0)
-                thresh = np.where(self.line_diagram, 255, 0)
-                thresh = thresh.astype('uint8')
-                contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-
-                with open(filename, "w+") as f:
-                    f.write(f'<svg width="{self.im_width}" height="{self.im_height}" xmlns="http://www.w3.org/2000/svg">')
-                    for c in contours:
-                        f.write('<path d="M')
-                        for i in range(len(c)):
-                            x, y = c[i][0]
-                            f.write(f"{x} {y} ")
-                        f.write('" fill="none" stroke="white"/>')
-                    f.write("</svg>")
-            else:
-                print("NO LINE DIAGRAM")
+        # elif filename[-4:] == '.svg':
+        #     # convert image to .svg format (for a laser cutter)
+        #     # https://stackoverflow.com/questions/43108751/convert-contour-paths-to-svg-paths
+        #     if self.line_diagram is not None:
+        #         # im_gray = cv2.cvtColor(self.line_diagram, cv2.COLOR_BGR2GRAY)
+        #         # _, thresh = cv2.threshold(im_gray, 127, 255, 0)
+        #         thresh = np.where(self.line_diagram, 255, 0)
+        #         thresh = thresh.astype('uint8')
+        #         contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        #
+        #         with open(filename, "w+") as f:
+        #             f.write(f'<svg width="{self.im_width}" height="{self.im_height}" xmlns="http://www.w3.org/2000/svg">')
+        #             for c in contours:
+        #                 f.write('<path d="M')
+        #                 for i in range(len(c)):
+        #                     x, y = c[i][0]
+        #                     f.write(f"{x} {y} ")
+        #                 f.write('" fill="none" stroke="white"/>')
+        #             f.write("</svg>")
+        #     else:
+        #         print("NO LINE DIAGRAM")
         else:
             print("BAD FILE EXTENSION")
 
@@ -391,6 +442,10 @@ class MainWindow(QMainWindow):
         self.enable_all(False)
 
         time_1 = time()
+
+        # for resizing to desired pdf size
+        x_scale = PDF_WIDTH / self.im_width
+        y_scale = PDF_HEIGHT / self.im_height
 
         # clear pdfs folder
         for filename in os.listdir("pdfs"):
@@ -409,7 +464,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(10)
 
         # find corners between regions
-        contours = self.find_corners(centers)
+        self.find_regions(centers)
         self.progress_bar.setValue(40)
 
         # create the reference image (to help put it back together again)
@@ -424,48 +479,75 @@ class MainWindow(QMainWindow):
             text_origin = (center[1][0] - text_size[0] // 2, center[0][0] + text_size[1] // 2)
 
             cv2.putText(full, text_num, text_origin, text_font, text_scale, (0, 0, 0), text_thickness)
+        full = cv2.resize(full, (PDF_WIDTH*100, PDF_HEIGHT*100))
         cv2.imwrite("pdfs/Reference.png", full)
 
         unit.set(defaultunit="inch")
-        engine = text.UnicodeEngine(size=8)
+        engine = text.UnicodeEngine(size=PDF_WIDTH*4/3)  # results in a good size / adjustable
 
         self.progress_bar.setValue(50)
 
-        for j, (name, rgb_color) in enumerate(self.color_palette_rgb.items()):  # for each specified color...
+        for r in self.regions:
+            r.calc_size()
 
+        margin_size = 1/4  # room around the edge (inches)
+        padding_size = 1/8  # room between pieces (inches)
+
+        for j, name in enumerate(self.color_palette_rgb.keys()):  # for each specified color...
             if len(self.color_palette_regions[name]) == 0:  # in this case, the color doesn't appear, skip it
                 continue
 
+            x_offset = margin_size
+            y_offset = margin_size
+            row_height = 0
+
             c = canvas.canvas()
             for contour_number in self.color_palette_regions[name]:  # for each region...
-                contour = contours[contour_number]
-                for i in range(len(contour)):  # step through the points of the region
+
+                region_size = self.regions[contour_number].scale_size(y_scale, x_scale)
+                # see if we need to move to the next line
+                if x_offset + region_size[1] > MATERIAL_WIDTH - margin_size:
+                    x_offset = margin_size
+                    y_offset += row_height + padding_size
+                    row_height = 0
+                # check if we have enough material
+                if y_offset + region_size[0] > MATERIAL_HEIGHT - margin_size:
+                    print("Not enough material:", name)
+                    self.progress_bar.setValue(100)
+                    self.progress_bar.setFormat(str(round(time() - time_1, 1)) + " s")
+                    self.enable_all(True)
+                    return
+
+                contour = self.regions[contour_number].scale_corners(y_scale, x_scale, y_offset, x_offset)
+                for i in range(len(contour)):  # step through the points of the region (contour)
                     if i == 0:
                         old_y, old_x = contour[i]
                         continue
                     y, x = contour[i]
                     if i == 1:
-                        p = path.line(old_x/100, old_y/100, x/100, y/100)
+                        p = path.line(old_x, old_y, x, y)
                         old_x = x
                         old_y = y
                     elif i == len(contour) - 1:  # at the end of the path, close it
-                        p = p << path.line(old_x/100, old_y/100, x/100, y/100)
+                        p = p << path.line(old_x, old_y, x, y)
                         p.append(path.closepath())
                     else:
-                        p = p << path.line(old_x/100, old_y/100, x/100, y/100)
+                        p = p << path.line(old_x, old_y, x, y)
                         old_x = x
                         old_y = y
 
-                if len(contour) > 0:
-                    # draw the path on the canvas
-                    c.stroke(p, [color.rgb.red])  # style.linewidth(0.1),
-                    # put number in region
-                    number_loc = np.where(centers == contour_number+1)  # printed numbers are 1-based, not 0-based
-                    c.insert(engine.text(number_loc[1][0]/100, number_loc[0][0]/100, str(contour_number+1),
-                                         [text.halign.center]))
+                # draw the path on the canvas
+                c.stroke(p, [color.rgb.red])  # style.linewidth(0.1),
+                # put number in region
+                center = self.regions[contour_number].scale_center(y_scale, x_scale, y_offset, x_offset)
+                c.insert(engine.text(center[1], center[0], str(contour_number+1), [text.halign.center]))
 
-            if len(contours) > 0:
-                c.writePDFfile(f"pdfs/{name}.pdf", page_bbox=bbox.bbox(0, 0, 6, 5))
+                # update offsets
+                if region_size[0] > row_height:
+                    row_height = region_size[0]
+                x_offset += region_size[1] + padding_size
+
+            c.writePDFfile(f"pdfs/{name}.pdf", page_bbox=bbox.bbox(0, 0, MATERIAL_WIDTH, MATERIAL_HEIGHT))
 
             self.progress_bar.setValue(50 + int((j + 1) * 50 / len(self.color_palette_rgb)))
 
@@ -486,7 +568,7 @@ class MainWindow(QMainWindow):
 
         return centers
 
-    def find_corners(self, centers) -> typing.List[list]:
+    def find_regions(self, centers) -> None:
         assert self.color_map is not None
 
         regions = [[] for _ in range(self.color_map.max()+1)]  # list of lists, list i has the corners of region i
@@ -515,12 +597,8 @@ class MainWindow(QMainWindow):
                     # adjust to ensure point is in bounds
                     if i <= 4:
                         y += 1
-                    elif i >= len(margin_map) - 5:
-                        y -= 1
                     if j <= 4:
                         x += 1
-                    elif j >= len(margin_map[0]) - 5:
-                        x -= 1
 
                     pt = (y-5, x-5)
                     for num in window_set:
@@ -540,12 +618,14 @@ class MainWindow(QMainWindow):
             x2, y2 = p2[0] - c[0], p2[1] - c[1]
             return math.atan2(x1 * y2 - y1 * x2, x1 * x2 + y1 * y2)
 
+        # sort points and save as a list of Region objects
+        self.regions = []
         for i in range(len(regions)):
             center = np.where(centers == i+1)
+            center = (center[0][0], center[1][0])
             sorted_points = sorted(regions[i], key=lambda p: angle_between(p, (1, 0), center))
-            regions[i] = sorted_points
-
-        return regions
+            # regions[i] = sorted_points
+            self.regions.append(Region(center, sorted_points))
 
     def voronoi_mode_clicked(self, checked: bool) -> None:
         if checked:
@@ -685,7 +765,7 @@ class MainWindow(QMainWindow):
         self.enable_all(True)
         self.set_diagram()
 
-    def color_and_find_lines(self, num_regions, progress_so_far):
+    def color_and_find_lines(self, num_regions: int, progress_so_far: int) -> None:
         image_colors = np.empty((num_regions, 3), dtype=np.uint8)
 
         for i in range(num_regions):
