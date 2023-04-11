@@ -30,7 +30,7 @@ MATERIAL_WIDTH = 12
 MATERIAL_HEIGHT = 8
 
 # TODO: allow for images of all sizes / resolutions
-# TODO: move pieces together to save space
+# Note: with color palette and no image, colors are evenly split
 
 
 class Region:
@@ -39,6 +39,15 @@ class Region:
         self.corners = corners
         self.size = size
         self.location = location
+
+    def sort_corners(self) -> None:
+        # order the corners in each region clockwise
+        def angle_between(p1, p2, c):
+            x1, y1 = p1[0] - c[0], p1[1] - c[1]
+            x2, y2 = p2[0] - c[0], p2[1] - c[1]
+            return math.atan2(x1 * y2 - y1 * x2, x1 * x2 + y1 * y2)
+
+        self.corners = sorted(self.corners, key=lambda p: angle_between(p, (1, 0), self.center))
 
     def calc_size(self) -> None:
         if len(self.corners) == 0:
@@ -61,6 +70,9 @@ class Region:
 
         self.size = max_y - min_y, max_x - min_x
         self.location = min_y, min_x
+
+    def calc_center(self) -> None:
+        self.center = [sum(x)/len(x) for x in zip(*self.corners)]
 
     def scale_corners(self, y_scale, x_scale, y_offset, x_offset) -> list:
         assert self.size is not None
@@ -354,16 +366,13 @@ class MainWindow(QMainWindow):
             if dialog.exec():
                 image_files = dialog.selectedFiles()
             if image_files is None:
-                # print("None entered")
                 return
-            # if len(image_files) > 1:  # impossible with 'ExistingFile'
-            #     print("Multiple files entered, using the first")
             image_file = image_files[0]
+
             try:
                 image = cv2.imread(image_file, cv2.IMREAD_COLOR)
                 if image is None:
-                    raise Exception("invalid filepath")
-                # print(image.shape)
+                    raise Exception("invalid file path")
                 self.image = cv2.resize(image, (self.im_width, self.im_height))
                 # self.im_height = self.image.shape[0]
                 # self.im_width = self.image.shape[1]
@@ -410,33 +419,16 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print("Exception during file save:", e)
                 quit()
-        # elif filename[-4:] == '.svg':
-        #     # convert image to .svg format (for a laser cutter)
-        #     # https://stackoverflow.com/questions/43108751/convert-contour-paths-to-svg-paths
-        #     if self.line_diagram is not None:
-        #         # im_gray = cv2.cvtColor(self.line_diagram, cv2.COLOR_BGR2GRAY)
-        #         # _, thresh = cv2.threshold(im_gray, 127, 255, 0)
-        #         thresh = np.where(self.line_diagram, 255, 0)
-        #         thresh = thresh.astype('uint8')
-        #         contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        #
-        #         with open(filename, "w+") as f:
-        #             f.write(f'<svg width="{self.im_width}" height="{self.im_height}" xmlns="http://www.w3.org/2000/svg">')
-        #             for c in contours:
-        #                 f.write('<path d="M')
-        #                 for i in range(len(c)):
-        #                     x, y = c[i][0]
-        #                     f.write(f"{x} {y} ")
-        #                 f.write('" fill="none" stroke="white"/>')
-        #             f.write("</svg>")
-        #     else:
-        #         print("NO LINE DIAGRAM")
         else:
             print("BAD FILE EXTENSION")
 
     def save_pdfs_clicked(self) -> None:
         if self.line_diagram is None or len(self.color_palette_rgb) == 0:
             print("NO LINE DIAGRAM AND/OR PALETTE")
+            return
+
+        if self.mode != 'voronoi' and self.image is not None:
+            print("Can't do superpixels with image rn")
             return
 
         self.enable_all(False)
@@ -459,12 +451,14 @@ class MainWindow(QMainWindow):
         self.progress_bar.resetFormat()
         self.progress_bar.setValue(0)
 
-        # find centers of each region
-        centers = self.find_centers()
-        self.progress_bar.setValue(10)
-
         # find corners between regions
-        self.find_regions(centers)
+        self.find_regions()
+        self.progress_bar.setValue(20)
+
+        for r in self.regions:
+            r.calc_size()
+            r.calc_center()
+            r.sort_corners()
         self.progress_bar.setValue(40)
 
         # create the reference image (to help put it back together again)
@@ -472,23 +466,20 @@ class MainWindow(QMainWindow):
         text_font = cv2.FONT_HERSHEY_PLAIN
         text_scale = 1
         text_thickness = 0
-        for i in range(1, centers.max() + 1):
-            center = np.where(centers == i)
-            text_num = str(i)
+        for i in range(len(self.regions)):
+            text_num = str(i + 1)
             text_size, _ = cv2.getTextSize(text_num, text_font, text_scale, text_thickness)
-            text_origin = (center[1][0] - text_size[0] // 2, center[0][0] + text_size[1] // 2)
+            text_origin = (round(self.regions[i].center[1] - text_size[0] // 2),
+                           round(self.regions[i].center[0] + text_size[1] // 2))
 
             cv2.putText(full, text_num, text_origin, text_font, text_scale, (0, 0, 0), text_thickness)
         full = cv2.resize(full, (PDF_WIDTH*100, PDF_HEIGHT*100))
         cv2.imwrite("pdfs/Reference.png", full)
 
         unit.set(defaultunit="inch")
-        engine = text.UnicodeEngine(size=PDF_WIDTH*4/3)  # results in a good size / adjustable
+        engine = text.UnicodeEngine(size=PDF_WIDTH*2)  # 4/3)  # results in a good size / adjustable
 
-        self.progress_bar.setValue(50)
-
-        for r in self.regions:
-            r.calc_size()
+        self.progress_bar.setValue(60)
 
         margin_size = 1/4  # room around the edge (inches)
         padding_size = 1/8  # room between pieces (inches)
@@ -556,19 +547,8 @@ class MainWindow(QMainWindow):
 
         self.enable_all(True)
 
-    def find_centers(self) -> np.ndarray:
-        # finds centers of each region in the color map
-        centers = np.zeros((self.im_height, self.im_width), np.int32)
-
-        for i in range(self.color_map.max() + 1):
-            w = np.where(self.color_map == i)
-            center = (w[1].min() + ((w[1].max() - w[1].min()) // 2), w[0].min() + ((w[0].max() - w[0].min()) // 2))
-
-            centers[center[1]][center[0]] = i + 1
-
-        return centers
-
-    def find_regions(self, centers) -> None:
+    def find_regions(self) -> None:
+        # finds each color region, so that they can be separated for printing/cutting
         assert self.color_map is not None
 
         regions = [[] for _ in range(self.color_map.max()+1)]  # list of lists, list i has the corners of region i
@@ -612,20 +592,10 @@ class MainWindow(QMainWindow):
         regions[self.color_map[0, self.im_width-1]].append((0, self.im_width-1))
         regions[self.color_map[self.im_height-1, self.im_width-1]].append((self.im_height-1, self.im_width-1))
 
-        # order the corners in each region clockwise
-        def angle_between(p1, p2, c):
-            x1, y1 = p1[0] - c[0], p1[1] - c[1]
-            x2, y2 = p2[0] - c[0], p2[1] - c[1]
-            return math.atan2(x1 * y2 - y1 * x2, x1 * x2 + y1 * y2)
-
         # sort points and save as a list of Region objects
         self.regions = []
         for i in range(len(regions)):
-            center = np.where(centers == i+1)
-            center = (center[0][0], center[1][0])
-            sorted_points = sorted(regions[i], key=lambda p: angle_between(p, (1, 0), center))
-            # regions[i] = sorted_points
-            self.regions.append(Region(center, sorted_points))
+            self.regions.append(Region(corners=regions[i]))
 
     def voronoi_mode_clicked(self, checked: bool) -> None:
         if checked:
@@ -774,7 +744,9 @@ class MainWindow(QMainWindow):
                     # if there is no color palette, choose any color
                     image_colors[i] = random.choices(range(256), k=3)
                 else:
-                    random_color_name = random.choice(list(self.color_palette_rgb.keys()))
+                    # there is a color palette, no image
+                    # random_color_name = random.choice(list(self.color_palette_rgb.keys()))
+                    random_color_name = list(self.color_palette_rgb.keys())[i % len(self.color_palette_rgb)]
                     image_colors[i] = self.color_palette_rgb[random_color_name]
                     self.color_palette_regions[random_color_name].append(i)
             else:
