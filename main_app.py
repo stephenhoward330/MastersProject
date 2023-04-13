@@ -428,8 +428,7 @@ class MainWindow(QMainWindow):
             return
 
         if self.mode != 'voronoi' and self.image is not None:
-            print("Can't do superpixels with image rn")
-            return
+            print("Warning: Superpixels with image, may give poor results")
 
         self.enable_all(False)
 
@@ -917,8 +916,17 @@ class MainWindow(QMainWindow):
                 c_sum = c_edges[i][j][0].astype(np.int32) + c_edges[i][j][1].astype(np.int32) \
                     + c_edges[i][j][2].astype(np.int32) - weight_reduction_factor
                 weights.append(min_weight if c_sum < min_weight else c_sum + min_weight)
-            self.progress_bar.setValue(int((i + 1) * 100 / len(c_edges)))
-        # TODO: change the below to sample without replacement
+            self.progress_bar.setValue(int((i + 1) * 50 / len(c_edges)))
+
+        # ##### THIS FINDS POINTS WITHOUT REPLACEMENT, BUT MUCH SLOWER
+        # self.points = []
+        # while len(self.points) < num_points:
+        #     point = random.choices(pixels, weights, k=1)[0]
+        #     if point in self.points:
+        #         continue
+        #     self.points.append(point)
+        #     self.progress_bar.setValue(50 + int((len(self.points)) * 50 / num_points))
+        # ##### MUCH FASTER, BUT WITH REPLACEMENT
         self.points = random.choices(pixels, weights, k=num_points)
 
         self.points = sorted(self.points)  # not necessary but may be nice
