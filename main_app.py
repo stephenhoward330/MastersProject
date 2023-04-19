@@ -11,7 +11,7 @@ from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import QMainWindow, QHBoxLayout, QVBoxLayout, QWidget, QRadioButton, QButtonGroup, QCheckBox, \
     QLabel, QFrame, QFileDialog, QPushButton, QLineEdit, QProgressBar, QApplication
 from PyQt6.QtCore import Qt, QDir
-from pyx import canvas, text, path, bbox, style, color, unit
+from pyx import canvas, text, path, bbox, color, unit
 from time import time
 
 DEFAULT_WIDTH = 600
@@ -30,6 +30,7 @@ MATERIAL_WIDTH = 12
 MATERIAL_HEIGHT = 8
 
 # TODO: allow for images of all sizes / resolutions
+# TODO: let PDF size and material size be set in the app
 # Note: with color palette and no image, colors are evenly split
 
 
@@ -323,6 +324,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def read_color_palette() -> typing.Dict[str, tuple]:
+        # reads palette.txt
         if not os.path.exists("palette.txt"):
             return {}
 
@@ -333,7 +335,7 @@ class MainWindow(QMainWindow):
                     continue
 
                 name, line = line.split(' ', 1)
-                line = line.replace('(', '').replace(')', '')  # remove parens
+                line = line.replace('(', '').replace(')', '')  # remove parentheses
                 color_tup = tuple(map(int, line.split(',')))  # form tuple
 
                 if len(color_tup) != 3:
@@ -341,12 +343,11 @@ class MainWindow(QMainWindow):
                 if min(color_tup) < 0 or max(color_tup) > 255:
                     raise Exception("Invalid palette.txt file: RGB values should be between 0 and 255")
 
-                # palette.append(color_tup[::-1])  # reverse the tuple into BGR form
                 palette[name] = color_tup[::-1]  # reverse the tuple into BGR form
 
         return palette
 
-    def reset_palette_regions(self):
+    def reset_palette_regions(self) -> None:
         self.color_palette_regions = {}
         for name in self.color_palette_rgb.keys():
             self.color_palette_regions[name] = []
@@ -421,10 +422,12 @@ class MainWindow(QMainWindow):
                 quit()
         else:
             print("BAD FILE EXTENSION")
+            print("Should be .png, .jpg, or .jpeg")
 
     def save_pdfs_clicked(self) -> None:
+        # saves out all files that a laser cutter would need to the 'pdfs' folder
         if self.line_diagram is None or len(self.color_palette_rgb) == 0:
-            print("NO LINE DIAGRAM AND/OR PALETTE")
+            print("NO LINE DIAGRAM AND/OR COLOR PALETTE")
             return
 
         if self.mode != 'voronoi' and self.image is not None:
@@ -433,6 +436,9 @@ class MainWindow(QMainWindow):
         self.enable_all(False)
 
         time_1 = time()
+
+        self.progress_bar.resetFormat()
+        self.progress_bar.setValue(0)
 
         # for resizing to desired pdf size
         x_scale = PDF_WIDTH / self.im_width
@@ -447,10 +453,7 @@ class MainWindow(QMainWindow):
                 except OSError as e:
                     print('Failed to delete %s. Reason: %s' % (file_path, e))
 
-        self.progress_bar.resetFormat()
-        self.progress_bar.setValue(0)
-
-        # find corners between regions
+        # find all the regions
         self.find_regions()
         self.progress_bar.setValue(20)
 
@@ -460,7 +463,7 @@ class MainWindow(QMainWindow):
             r.sort_corners()
         self.progress_bar.setValue(40)
 
-        # create the reference image (to help put it back together again)
+        # create the reference image (to help the user put it back together again)
         full = self.draw_diagram(True)
         text_font = cv2.FONT_HERSHEY_PLAIN
         text_scale = 1
@@ -475,16 +478,18 @@ class MainWindow(QMainWindow):
         full = cv2.resize(full, (PDF_WIDTH*100, PDF_HEIGHT*100))
         cv2.imwrite("pdfs/Reference.png", full)
 
+        # set units to inches
         unit.set(defaultunit="inch")
-        engine = text.UnicodeEngine(size=PDF_WIDTH*2)  # 4/3)  # results in a good size / adjustable
+        engine = text.UnicodeEngine(size=PDF_WIDTH*2)  # results in a good size / adjustable
 
-        self.progress_bar.setValue(60)
+        self.progress_bar.setValue(50)
 
         margin_size = 1/4  # room around the edge (inches)
         padding_size = 1/8  # room between pieces (inches)
 
         for j, name in enumerate(self.color_palette_rgb.keys()):  # for each specified color...
-            if len(self.color_palette_regions[name]) == 0:  # in this case, the color doesn't appear, skip it
+            if len(self.color_palette_regions[name]) == 0:
+                # in this case, the color doesn't appear, skip it
                 continue
 
             x_offset = margin_size
@@ -547,7 +552,7 @@ class MainWindow(QMainWindow):
         self.enable_all(True)
 
     def find_regions(self) -> None:
-        # finds each color region, so that they can be separated for printing/cutting
+        # finds each region of the diagram, so that they can be separated for printing/cutting
         assert self.color_map is not None
 
         regions = [[] for _ in range(self.color_map.max()+1)]  # list of lists, list i has the corners of region i
@@ -591,7 +596,7 @@ class MainWindow(QMainWindow):
         regions[self.color_map[0, self.im_width-1]].append((0, self.im_width-1))
         regions[self.color_map[self.im_height-1, self.im_width-1]].append((self.im_height-1, self.im_width-1))
 
-        # sort points and save as a list of Region objects
+        # save as a list of Region objects
         self.regions = []
         for i in range(len(regions)):
             self.regions.append(Region(corners=regions[i]))
@@ -617,15 +622,15 @@ class MainWindow(QMainWindow):
             self.set_diagram(reset=True)
 
     def generate_random_clicked(self) -> None:
+        # clear the frame and reset it with new points
         self.generate_random_points(int(self.num_points_field.text()))
-        # clear the frame and reset it with the new points
         # self.im_height = DEFAULT_HEIGHT
         # self.im_width = DEFAULT_WIDTH
         self.set_diagram(reset=True)
 
     def generate_smart_clicked(self) -> None:
+        # clear the frame and reset it with new points
         self.generate_smart_points(int(self.num_points_field.text()))
-        # clear the frame and reset it with the new points
         self.set_diagram(reset=True)
 
     def toggle_points_clicked(self, checked: bool) -> None:
@@ -710,9 +715,10 @@ class MainWindow(QMainWindow):
             im = np.full((self.im_height, self.im_width, 3), 255, np.uint8)
         else:
             im = self.image.copy()
+
         # gaussian blur
         im = cv2.GaussianBlur(im, (5, 5), 0)
-        # Convert to LAB
+        # Convert to LAB format
         src_lab = cv2.cvtColor(im, cv2.COLOR_BGR2LAB)  # convert to LAB
 
         # SLIC
@@ -735,20 +741,27 @@ class MainWindow(QMainWindow):
         self.set_diagram()
 
     def color_and_find_lines(self, num_regions: int, progress_so_far: int) -> None:
+        # after finding the color map through Voronoi or superpixels:
+        #   determine colors for each region
+        #   and find the lines between the regions
+
         image_colors = np.empty((num_regions, 3), dtype=np.uint8)
 
+        # assign a color to each region
         for i in range(num_regions):
             if self.image is None:
                 if len(self.color_palette_rgb) == 0:
-                    # if there is no color palette, choose any color
+                    # if there is no color palette, choose any random color
                     image_colors[i] = random.choices(range(256), k=3)
                 else:
-                    # there is a color palette, no image
+                    # there is a color palette, but no image
                     # random_color_name = random.choice(list(self.color_palette_rgb.keys()))
+                    # pseudo-random, will balance the colors over the color palette
                     random_color_name = list(self.color_palette_rgb.keys())[i % len(self.color_palette_rgb)]
                     image_colors[i] = self.color_palette_rgb[random_color_name]
                     self.color_palette_regions[random_color_name].append(i)
             else:
+                # find the average color across the region in the reference image
                 mask = np.where(self.color_map == i, 255, 0)
                 mask = mask.astype(np.uint8)
                 mean = cv2.mean(self.image, mask)
@@ -770,7 +783,7 @@ class MainWindow(QMainWindow):
                 self.progress_bar.setValue(progress_so_far + int((i + 1) * (100-progress_so_far) / num_regions))
         self.diagram = image_colors[self.color_map]
 
-        # find the lines (borders between colors)
+        # find the lines (borders between regions)
         # vertical borders
         v_lines = np.where(self.color_map[:-1] != self.color_map[1:], True, False)
         v_lines = np.vstack([[False] * self.im_width, v_lines])
@@ -799,6 +812,7 @@ class MainWindow(QMainWindow):
             self.generate_smart_points_button.setEnabled(False)
 
     def check_superpixel_input(self) -> None:
+        # check input of the 'region size' field as well as the 'iterations' field
         if self.region_size_field.text().isdigit() and int(self.region_size_field.text()) >= 1 \
                 and self.iterations_field.text().isdigit() and int(self.iterations_field.text()) >= 1:
             self.generate_diagram_button.setEnabled(True)
@@ -806,9 +820,10 @@ class MainWindow(QMainWindow):
             self.generate_diagram_button.setEnabled(False)
 
     def set_diagram(self, reset: bool = False) -> None:
-        # sets the voronoi_diagram in the frame
-        # get a new blank canvas
+        # sets the diagram in the frame
+
         if reset:
+            # get a new blank canvas
             self.diagram = np.full((self.im_height, self.im_width, 3), 255, np.uint8)
             self.line_diagram = None
             self.num_superpixels_field.setText("Superpixels: _____")
@@ -821,6 +836,7 @@ class MainWindow(QMainWindow):
 
     def draw_diagram(self, all_on: bool = False) -> np.ndarray:
         # adds points, lines, and colors to the diagram if desired
+
         # get the colored diagram (or not)
         if self.show_colors or all_on:
             image = self.diagram.copy()
@@ -842,8 +858,6 @@ class MainWindow(QMainWindow):
 
         # add the lines to the canvas (or not)
         if all_on or self.show_lines and self.line_diagram is not None:
-            # black_img = np.zeros((500, 600, 3))
-            # image = np.where(self.line_diagram is True, black_img, image)
             for i in range(len(image)):
                 for j in range(len(image[i])):
                     if self.line_diagram[i][j]:
@@ -853,6 +867,11 @@ class MainWindow(QMainWindow):
 
     def generate_random_points(self, num_points: int) -> None:
         # generate new, random points
+
+        if num_points > self.im_width * self.im_height / 10:
+            print("TOO MANY POINTS, REQUEST LESS THAN", round(self.im_width * self.im_height / 10))
+            return
+
         self.enable_all(False)
 
         time_1 = time()
@@ -865,9 +884,11 @@ class MainWindow(QMainWindow):
             x = random.randint(0, self.im_width - 1)
             y = random.randint(0, self.im_height - 1)
             if (x, y) in self.points:
+                # duplicate point, skip
                 continue
             self.points.append((x, y))
             self.progress_bar.setValue(int(len(self.points) * 100 / num_points))
+
         self.points = sorted(self.points)  # not necessary but may be nice
 
         self.progress_bar.setValue(100)
@@ -877,6 +898,11 @@ class MainWindow(QMainWindow):
 
     def generate_smart_points(self, num_points: int) -> None:
         # generate new, smart points
+
+        if num_points > self.im_width * self.im_height / 10:
+            print("TOO MANY POINTS, REQUEST LESS THAN", round(self.im_width * self.im_height / 10))
+            return
+
         self.enable_all(False)
 
         time_1 = time()
@@ -903,10 +929,10 @@ class MainWindow(QMainWindow):
         c_edges = cv2.addWeighted(c_edges, 1.0, up_edges, 1.0, 0.0)
         c_edges = cv2.addWeighted(c_edges, 1.0, left_edges, 1.0, 0.0)
 
-        # cv2.imwrite("images/edges.png", c_edges)
-
         min_weight = 3
         weight_reduction_factor = 150
+
+        # ############# CALCULATE PIXEL WEIGHTS
 
         pixels = []
         weights = []
@@ -916,7 +942,7 @@ class MainWindow(QMainWindow):
                 c_sum = c_edges[i][j][0].astype(np.int32) + c_edges[i][j][1].astype(np.int32) \
                     + c_edges[i][j][2].astype(np.int32) - weight_reduction_factor
                 weights.append(min_weight if c_sum < min_weight else c_sum + min_weight)
-            self.progress_bar.setValue(int((i + 1) * 50 / len(c_edges)))
+            self.progress_bar.setValue(int((i + 1) * 100 / len(c_edges)))
 
         # ##### THIS FINDS POINTS WITHOUT REPLACEMENT, BUT MUCH SLOWER
         # self.points = []
@@ -926,6 +952,7 @@ class MainWindow(QMainWindow):
         #         continue
         #     self.points.append(point)
         #     self.progress_bar.setValue(50 + int((len(self.points)) * 50 / num_points))
+
         # ##### MUCH FASTER, BUT WITH REPLACEMENT
         self.points = random.choices(pixels, weights, k=num_points)
 
@@ -937,6 +964,8 @@ class MainWindow(QMainWindow):
         self.enable_all(True)
 
     def enable_all(self, t_f: bool) -> None:
+        # enable (or disable) all fields/buttons
+
         self.open_image_button.setEnabled(t_f)
         self.save_result_button.setEnabled(t_f)
         if len(self.color_palette_rgb) > 0:
